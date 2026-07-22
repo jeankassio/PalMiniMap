@@ -1,0 +1,29 @@
+{
+  "ModName": "PalMiniMap",
+  "PackageName": "PalMiniMap",
+  "Thumbnail": "thumbnail.png",
+  "Version": "v1.1.1",
+  "MinRevision": 82182,
+  "Author": "Jean Kassio",
+  "Dependencies": [
+    "UE4SSExperimentalPW"
+  ],
+  "Tags": [
+    "UE4SS",
+    "User Interface"
+  ],
+  "InstallRule": [
+    {
+      "Type": "LogicMods",
+      "Targets": [
+        "./LogicMods/"
+      ]
+    },
+    {
+      "Type": "Lua",
+      "Targets": [
+        "./Scripts"
+      ]
+    }
+  ]
+}
