@@ -30,10 +30,17 @@ INSTALLATION
 
 That's it. The files land here:
   Pal\Content\Paks\LogicMods\PalMiniMap.pak
+  Pal\Content\Paks\LogicMods\PalMiniMap.utoc
+  Pal\Content\Paks\LogicMods\PalMiniMap.ucas
   Pal\Content\Paks\LogicMods\PalMiniMap\config.lua
   Pal\Binaries\WinGDK\ue4ss\Mods\PalMiniMap\Scripts\main.lua
   Pal\Binaries\WinGDK\ue4ss\Mods\PalMiniMap\Scripts\json.lua
   Pal\Binaries\WinGDK\ue4ss\Mods\PalMiniMap\enabled.txt
+
+IMPORTANT: all THREE of PalMiniMap.pak + PalMiniMap.utoc + PalMiniMap.ucas
+must be present together. The Game Pass (WinGDK) build uses the IoStore
+format, so unlike the Steam version a lone .pak will NOT load the minimap
+(the F5 menu would still open, but the map itself never appears).
 
 NOTE: do NOT use the Steam/Win64 build of UE4SS or the Win64 download of
 this mod on Game Pass - the WinGDK build only loads mods from the WinGDK
