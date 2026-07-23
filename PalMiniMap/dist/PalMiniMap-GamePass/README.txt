@@ -45,6 +45,16 @@ UNINSTALL
 Delete the files listed above (and the two PalMiniMap folders).
 
 ===================================================================
+WHAT'S NEW IN v1.2.0
+===================================================================
+- In-game menu is now localized (English and Simplified Chinese),
+  including the "edit position" overlay.
+- Menu controls use the F1-F5 layout; custom keybinds are preserved.
+- Minimap opacity and shape apply live, without disturbing other settings.
+- More robust around title-screen / world transitions and game shutdown.
+- Collected Lifmunk effigies and notes are now removed from the minimap too.
+
+===================================================================
 WHAT'S NEW IN v1.1.1
 ===================================================================
 - Reliability: background tasks that error are now logged and skipped

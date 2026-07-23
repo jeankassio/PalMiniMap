@@ -2,6 +2,20 @@ PalMiniMap - a minimap radar for Palworld 1.0.x
 Based on Paldar by T3R3NC3B.
 
 ===================================================================
+WHAT'S NEW IN v1.2.0
+===================================================================
+- In-game menu is now localized (English and Simplified Chinese),
+  including the "edit position" overlay.
+- Menu controls use the F1-F5 layout; your custom keybinds are kept if
+  you changed them.
+- Minimap opacity and shape now apply live, without disturbing other
+  settings.
+- More robust around title-screen / world transitions and game shutdown
+  (no more stale-object errors or backup warnings).
+- Collected Lifmunk effigies and notes are now removed from the minimap
+  too (they stay in the world but are hidden once you pick them up).
+
+===================================================================
 WHAT'S NEW IN v1.1.1
 ===================================================================
 - Reliability: if a background task ever errors, it is now logged and
