@@ -2,6 +2,14 @@ PalMiniMap - a minimap radar for Palworld 1.0.x
 Based on Paldar by T3R3NC3B.
 
 ===================================================================
+WHAT'S NEW IN v1.2.2
+===================================================================
+- Fixes a crash after several minutes of play. When an item was collected
+  its minimap icon was destroyed but left behind in the mod's internal
+  list, so the same icon was destroyed again every few seconds until the
+  game crashed. Collected icons are now hidden instead of destroyed.
+
+===================================================================
 WHAT'S NEW IN v1.2.1
 ===================================================================
 - Fixes a crash when loading into the world. The mod could touch the
