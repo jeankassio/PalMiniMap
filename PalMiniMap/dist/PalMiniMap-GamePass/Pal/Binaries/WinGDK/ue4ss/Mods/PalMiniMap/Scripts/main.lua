@@ -16,8 +16,23 @@ local CONFIG_PATH = "../../Content/Paks/LogicMods/Paldar.modconfig.json"
 local MOD_CLASS_PATH = "/Game/Mods/Paldar/ModActor"
 
 -- User settings backup outside Paks/ (survives mod updates, which replace
--- or wipe the LogicMods folder)
-local BACKUP_PATH = "ue4ss/Mods/PalMiniMap/user_settings.json"
+-- or wipe the LogicMods folder). Resolve it from this script because recent
+-- Palworld UE4SS installs can be relocated outside Pal/Binaries/Win64.
+local function getScriptDirectory()
+    if debug == nil or debug.getinfo == nil then return nil end
+    local ok, info = pcall(debug.getinfo, 1, "S")
+    if not ok or type(info) ~= "table" or type(info.source) ~= "string" then
+        return nil
+    end
+    local source = info.source
+    if source:sub(1, 1) == "@" then source = source:sub(2) end
+    source = source:gsub("\\", "/")
+    return source:match("^(.+)/[^/]+$")
+end
+
+local SCRIPT_DIRECTORY = getScriptDirectory()
+local BACKUP_PATH = SCRIPT_DIRECTORY and (SCRIPT_DIRECTORY .. "/../user_settings.json")
+    or "user_settings.json"
 
 -- Default configuration template: the mod package no longer ships the
 -- config file; it is created here on first run and NEVER overwritten by
@@ -26,6 +41,56 @@ local BACKUP_PATH = "ue4ss/Mods/PalMiniMap/user_settings.json"
 local DEFAULTS_JSON = [==[
 {"note":"THIS JSON FILE WAS CREATED USING THE `DekModConfigMenu` MOD FOR PALWORLD! DO NOT MANUALLY EDIT THIS FILE UNLESS YOU KNOW WHAT YOU'RE DOING -- USE THE `DekModConfigMenu` MOD INSTEAD <3","meta":{"game":false,"vers":"1.1.0","auth":"T3R3NC3B","desc":"PalMiniMap (based on Paldar by T3R3NC3B) - a minimap radar that displays live pal positions and more. Updated for Palworld 1.0 By Jean Kassio.","link":{"nexus-mod-id":"879","curse-slug":"blueprint-code-mods/paldar-mini-map-radar","donate":""}},"General Settings":{"type":"header","desc":"Configure general settings."},"Enable mod":{"type":"boolean","desc":"Enable/disable the entire Paldar mod.","init":true,"live":true},"Minimap render resolution":{"type":"integer","desc":"Lower numbers for better performance, at the cost of quality.","flag":"","opts":{"min":32,"max":2048,"step":1},"init":512,"live":512},"Minimap opacity":{"type":"integer","desc":"Adjust transparency of the whole minimap.","flag":"","opts":{"min":1,"max":100,"step":1},"init":100,"live":100},"Minimap shape":{"type":"option","desc":"Change minimap shape to circular or square.","opts":["Circle","Square"],"init":"Square","live":"Square"},"Minimap image quality %":{"type":"integer","desc":"Resolution of the minimap terrain image, as a percent of the render resolution. Lower = big GPU saving, blurrier map. Applied live.","flag":"","opts":{"min":25,"max":100,"step":5},"init":60,"live":60},"Reduce captures when idle":{"type":"boolean","desc":"Skip re-rendering the minimap terrain while the view is not moving/turning/zooming. Big FPS saver when standing still or in base. No visual change.","init":true,"live":true},"Minimap autozoom while moving":{"type":"boolean","desc":"Auto zoom out minimap to different levels when walking, running & flying.","init":true,"live":true},"Minimap rotation lock":{"type":"boolean","desc":"Lock minimap rotation to north, player icon rotates instead.","init":false,"live":false},"Lock all icon rotations to north":{"type":"boolean","desc":"Locks all icons (excluding pals & NPCs) to be upright (north).","init":false,"live":false},"Autohide minimap while in base camps":{"type":"boolean","desc":"Hide minimap while in player base camps.","init":false,"live":false},"Hide collected items from minimap":{"type":"boolean","desc":"Remove chest, egg, note and lifmunk effigy icons from the minimap once you collect them (they disappear from the world).","init":true,"live":true},"Pal Locations":{"type":"header","desc":"Configure settings for displaying Pals."},"Show pal positions":{"type":"boolean","desc":"Show Pals around the player on the minimap.","init":true,"live":true},"Only show shiny pals":{"type":"boolean","desc":"Only shows shiny Pals around the player on the minimap.","init":false,"live":false},"Show pal icons while megazoomed out":{"type":"boolean","desc":"Keep Pal icons visible on the minimap while in megazoomed out mode.","init":false,"live":false},"NPCs and Points of Interest":{"type":"header","desc":"Customize display settings for NPCs and points of interest."},"Show NPC humans":{"type":"boolean","desc":"Show NPC humans on the minimap.","init":true,"live":true},"Show player base camps":{"type":"boolean","desc":"Show player base camps on the minimap.","init":true,"live":true},"Show player death locations":{"type":"boolean","desc":"Show player death locations on the minimap.","init":true,"live":true},"Show other players":{"type":"boolean","desc":"Show other players around the player on the minimap.","init":true,"live":true},"Show dungeons":{"type":"boolean","desc":"Show dungeon locations on the minimap.","init":true,"live":true},"Chests, Notes, and Other":{"type":"header","desc":"Customize display settings for chests, notes, and other entities."},"Show chests":{"type":"boolean","desc":"Show chests around the player on the minimap.","init":true,"live":true},"Show notes":{"type":"boolean","desc":"Show notes around the player on the minimap.","init":true,"live":true},"Show eggs":{"type":"boolean","desc":"Show eggs around the player on the minimap.","init":true,"live":true},"Show fast travel points":{"type":"boolean","desc":"Show fast travel points on the minimap.","init":true,"live":true},"Show skillfruit trees":{"type":"boolean","desc":"Show skillfruit trees around the player on the minimap.","init":true,"live":true},"Show lifmunk effigies":{"type":"boolean","desc":"Show Lifmunk Effigies around the player on the minimap.","init":false,"live":false},"Scan Frequencies":{"type":"header","desc":"Adjust scanning frequencies for various entities."},"Pal rescan rate":{"type":"integer","desc":"How often the radar will scan for new Pals around the player. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":5,"live":5},"Players rescan frequency":{"type":"integer","desc":"How often the radar will scan for NEW players (not refresh rate of current players). In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":12,"live":12},"Human NPC rescan frequency":{"type":"integer","desc":"How often the radar will scan for NPC humans around the player on the minimap. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":19,"live":19},"Chest rescan frequency":{"type":"integer","desc":"How often the radar will scan for chests around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Egg rescan frequency":{"type":"integer","desc":"How often the radar will scan for eggs around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Keybinds":{"type":"header","desc":"Customize keyboard shortcuts."},"Megazoom mode toggle keybind":{"type":"keybind","desc":"Set keybind for megazoom out mode toggle. Hold this key and press + or - to fine-zoom the minimap.","init":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Cycle default minimap positions keybind":{"type":"keybind","desc":"Set keybind for cycling between default minimap positions.","init":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Show/hide minimap toggle keybind":{"type":"keybind","desc":"Show/hide minimap toggle keyboard button.","init":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Customize minimap keybind":{"type":"keybind","desc":"Set keybind to enter customization mode - move with arrow keys, resize with + and - keys.","init":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Use new minimap edit mode size method":{"type":"boolean","desc":"ON: resize minimap in edit mode with mouse scroll wheel (BROKEN on Palworld 1.0). OFF (default): resize with + and - keys (also 9 and 0).","init":false,"live":false},"Minimap capture FPS cap":{"type":"integer","desc":"Max minimap terrain captures per second. Big FPS saver on high-refresh screens. 0 = uncapped (original behavior).","flag":"","opts":{"min":0,"max":120,"step":5},"init":30,"live":30},"Minimap capture LOD bias":{"type":"integer","desc":"Renders the minimap terrain with cheaper detail levels. 1 = original, higher = faster. Barely visible on the small map.","flag":"","opts":{"min":1,"max":8,"step":1},"init":3,"live":3}}
 ]==]
+
+-- The stock blueprint reads these four keybind entries from the modconfig
+-- file. Keep the requested F1-F4 layout in the embedded defaults, while
+-- migrating only untouched legacy Z/L/H/K values below so custom bindings
+-- remain intact.
+local KEYBIND_DEFAULTS = {
+    { name = "Megazoom mode toggle keybind", key = "F1", legacy = "Z" },
+    { name = "Cycle default minimap positions keybind", key = "F2", legacy = "L" },
+    { name = "Show/hide minimap toggle keybind", key = "F3", legacy = "H" },
+    { name = "Customize minimap keybind", key = "F4", legacy = "K" },
+}
+
+local function makeKeybind(key)
+    return { key = key, bShift = false, bCtrl = false, bAlt = false, bCmd = false }
+end
+
+local function applyKeybindDefaults(defaults)
+    for _, spec in ipairs(KEYBIND_DEFAULTS) do
+        local entry = defaults[spec.name]
+        if type(entry) == "table" then
+            entry.init = makeKeybind(spec.key)
+            entry.live = makeKeybind(spec.key)
+        end
+    end
+end
+
+local function isLegacyKeybind(value, legacy)
+    return type(value) == "table"
+        and value.key == legacy
+        and value.bShift ~= true
+        and value.bCtrl ~= true
+        and value.bAlt ~= true
+        and value.bCmd ~= true
+end
+
+local function migrateKeybinds(config)
+    local changed = false
+    for _, spec in ipairs(KEYBIND_DEFAULTS) do
+        local entry = config[spec.name]
+        if type(entry) == "table" then
+            for _, field in ipairs({ "init", "live" }) do
+                if isLegacyKeybind(entry[field], spec.legacy) then
+                    entry[field] = makeKeybind(spec.key)
+                    changed = true
+                end
+            end
+        end
+    end
+    return changed
+end
 
 local ZOOM_STEP = 500.0           -- zoom change per +/- key press
 local ZOOM_MIN, ZOOM_MAX = -7500.0, 15000.0
@@ -57,6 +122,19 @@ local function isAlive(obj)
     if obj == nil then return false end
     local ok, valid = pcall(function() return obj:IsValid() end)
     return ok and valid == true
+end
+
+-- UE4SS may return a fresh Lua wrapper each time a UObject property is read,
+-- so userdata identity is not stable enough for caches. FullName is stable
+-- for the lifetime of the world and avoids reapplying expensive widget state
+-- every second.
+local function objectKey(obj)
+    if obj == nil then return nil end
+    local ok, name = pcall(function() return obj:GetFullName() end)
+    if ok and name ~= nil then return tostring(name) end
+    local okn, fname = pcall(function() return obj:GetFName():ToString() end)
+    if okn and fname ~= nil then return tostring(fname) end
+    return nil
 end
 
 local function currentWorldName()
@@ -112,10 +190,22 @@ local function getModActor()
     return cachedActor
 end
 
+local applyMinimapVisualSettings
+local applyEditModeLocalization
+
 local function pokeModActor()
     local actor = getModActor()
     if actor then
         pcall(function() actor:LoadSettingsFromJson() end)
+        if applyMinimapVisualSettings then
+            -- LoadSettingsFromJson runs for every menu edit. Let the visual
+            -- cache decide whether opacity/shape really changed; forcing this
+            -- path rebuilds the render-target binding for unrelated options.
+            applyMinimapVisualSettings(actor, false)
+        end
+        if applyEditModeLocalization then
+            applyEditModeLocalization(actor, false)
+        end
     end
 end
 
@@ -175,6 +265,15 @@ local function cfgBool(key, default)
     return default
 end
 
+local function cfgNumber(key, default)
+    local cfg = readConfig()
+    if cfg then
+        local e = cfg[key]
+        if type(e) == "table" and type(e.live) == "number" then return e.live end
+    end
+    return default
+end
+
 local function writeFileTo(path, text)
     local f = io.open(path, "w")
     if not f then return false end
@@ -220,6 +319,7 @@ local function ensureConfig()
         log("ERROR: embedded defaults failed to parse: " .. tostring(defaults))
         return
     end
+    applyKeybindDefaults(defaults)
     local cur = readJsonFile(CONFIG_PATH)
     local restored = false
     if cur == nil then
@@ -242,6 +342,10 @@ local function ensureConfig()
                 log("new option added by update: '" .. tostring(k) .. "'")
             end
         end
+        if migrateKeybinds(cur) then
+            changed = true
+            log("migrated untouched legacy keybinds to F1-F4")
+        end
         if type(cur.meta) == "table" and type(defaults.meta) == "table"
            and cur.meta.vers ~= defaults.meta.vers then
             cur.meta.vers = defaults.meta.vers
@@ -256,6 +360,71 @@ local function ensureConfig()
         local oke, text = pcall(json.encode, cur)
         if oke then writeFileTo(BACKUP_PATH, text) end
     end
+end
+
+-- The blueprint applies these values only during actor initialization. The
+-- config menu can change them later, so refresh both the widget and the
+-- actor fields explicitly whenever the live values change or a new world
+-- creates a new widget.
+local visualActorKey = nil
+local visualWidgetKey = nil
+local visualActorOpacity = nil
+local visualActorSquare = nil
+local visualOpacity = nil
+local visualSquare = nil
+
+applyMinimapVisualSettings = function(actor, force)
+    if actor == nil or not isAlive(actor) then return end
+    local cfg = readConfig()
+    if not cfg then return end
+
+    local opacityValue = cfgNumber("Minimap opacity", 100)
+    if opacityValue < 1 then opacityValue = 1 end
+    if opacityValue > 100 then opacityValue = 100 end
+    local opacity = opacityValue / 100.0
+    local shape = cfg["Minimap shape"]
+    local square = type(shape) == "table" and shape.live == "Square"
+    local widget = actor.mapWidget
+    local actorKey = objectKey(actor)
+    local widgetKey = objectKey(widget)
+    local actorChanged = actorKey ~= visualActorKey or widgetKey ~= visualWidgetKey
+
+    -- Keep the reflected settings in sync even if the widget is not ready,
+    -- but do not write identical reflected values every second.
+    if force or actorChanged or visualActorOpacity ~= opacity then
+        local ok = pcall(function() actor.S_MinimapOpacity = opacity end)
+        if ok then visualActorOpacity = opacity end
+    end
+    if force or actorChanged or visualActorSquare ~= square then
+        local ok = pcall(function() actor.S_SquareMinimap = square end)
+        if ok then visualActorSquare = square end
+    end
+
+    if widget == nil or not isAlive(widget) then
+        visualActorKey, visualWidgetKey = actorKey, widgetKey
+        return
+    end
+
+    if force or actorChanged or visualOpacity ~= opacity then
+        local ok, err = pcall(function() widget:SetMinimapOpacity(opacity) end)
+        if ok then
+            visualOpacity = opacity
+            log(string.format("minimap opacity applied: %d%%", math.floor(opacityValue + 0.5)))
+        else
+            log("warning: SetMinimapOpacity failed: " .. tostring(err))
+        end
+    end
+
+    if force or actorChanged or visualSquare ~= square then
+        local ok, err = pcall(function() widget:setRT(actor.dynMat, square) end)
+        if ok then
+            visualSquare = square
+            log("minimap shape applied: " .. (square and "Square" or "Circle"))
+        else
+            log("warning: setRT failed: " .. tostring(err))
+        end
+    end
+    visualActorKey, visualWidgetKey = actorKey, widgetKey
 end
 
 -- ---------------------------------------------------------------
@@ -596,6 +765,143 @@ end
 -- ---------------------------------------------------------------
 -- Menu UI
 -- ---------------------------------------------------------------
+-- The config keys and option values below are part of the persisted modconfig
+-- format, so keep them in English. Only the text rendered by this menu is
+-- localized.
+local MENU_TEXT = {
+    en = {
+        subtitle = "Minimap configuration",
+        help = "[ %s ] close      [ + / - ] fine zoom      scroll for more",
+        footer = "Changes are saved and applied instantly.",
+    },
+    zh = {
+        subtitle = "小地图设置",
+        help = "[ %s ] 关闭      [ + / - ] 微调缩放      滚动查看更多",
+        footer = "更改会立即保存并应用。",
+        ["Very Low"] = "极低",
+        ["Low"] = "低",
+        ["Medium"] = "中",
+        ["High"] = "高",
+        ["Ultra"] = "极高",
+        ["General Settings"] = "常规设置",
+        ["Minimap opacity"] = "小地图不透明度",
+        ["Minimap quality"] = "小地图质量",
+        ["Minimap Square"] = "方形小地图",
+        ["Minimap autozoom while moving"] = "移动时自动缩放小地图",
+        ["Minimap rotation lock"] = "锁定小地图朝向",
+        ["Lock all icon rotations to north"] = "锁定所有图标朝北",
+        ["Autohide minimap while in base camps"] = "进入据点时自动隐藏小地图",
+        ["Hide collected items"] = "隐藏已收集物品",
+        ["Pal Locations"] = "帕鲁位置",
+        ["Show pal positions"] = "显示帕鲁位置",
+        ["Only show shiny pals"] = "仅显示闪光帕鲁",
+        ["Show pal icons while megazoomed out"] = "超远缩放时显示帕鲁图标",
+        ["NPCs and Points of Interest"] = "NPC 与兴趣点",
+        ["Show NPC humans"] = "显示人类 NPC",
+        ["Show player base camps"] = "显示玩家据点",
+        ["Show player death locations"] = "显示玩家死亡位置",
+        ["Show other players"] = "显示其他玩家",
+        ["Show dungeons"] = "显示地下城",
+        ["Chests, Notes, and Other"] = "宝箱、手记与其他",
+        ["Show chests"] = "显示宝箱",
+        ["Show notes"] = "显示手记",
+        ["Show eggs"] = "显示帕鲁蛋",
+        ["Show fast travel points"] = "显示快速传送点",
+        ["Show skillfruit trees"] = "显示技能果树",
+        ["Show lifmunk effigies"] = "显示翠叶鼠雕像",
+        ["Keybinds (edit in mod config file)"] = "快捷键（请在 Mod 配置文件中修改）",
+        ["Megazoom mode toggle keybind"] = "超远缩放模式切换键",
+        ["Cycle default minimap positions keybind"] = "切换小地图预设位置键",
+        ["Show/hide minimap toggle keybind"] = "显示/隐藏小地图键",
+        ["Customize minimap keybind"] = "小地图自定义模式键",
+    },
+}
+
+local lastMenuCulture = nil
+local detectedMenuLanguage = nil
+local languageDetectionWarningLogged = false
+
+local function detectMenuLanguage()
+    -- Palworld applies language changes on restart, which reloads this script.
+    -- Cache the successful lookup so the one-second maintenance pass does not
+    -- call into the internationalization library forever.
+    if detectedMenuLanguage ~= nil then return detectedMenuLanguage end
+    local culture
+    local ok, err = pcall(function()
+        local library = StaticFindObject(
+            "/Script/Engine.Default__KismetInternationalizationLibrary"
+        )
+        if not isAlive(library) then
+            error("KismetInternationalizationLibrary is unavailable")
+        end
+        culture = library:GetCurrentLanguage()
+        if type(culture) ~= "string" then
+            culture = culture:ToString()
+        end
+        if type(culture) ~= "string" or culture == "" then
+            error("GetCurrentLanguage returned no culture")
+        end
+    end)
+    if not ok then
+        if not languageDetectionWarningLogged then
+            languageDetectionWarningLogged = true
+            log("language detection failed; using English: " .. tostring(err))
+        end
+        return "en"
+    end
+
+    local language = culture:sub(1, 2):lower() == "zh" and "zh" or "en"
+    detectedMenuLanguage = language
+    if culture ~= lastMenuCulture then
+        lastMenuCulture = culture
+        log(string.format("menu language detected: culture=%s; using=%s", culture, language))
+    end
+    return language
+end
+
+local function menuText(language, key)
+    local localized = MENU_TEXT[language]
+    return (localized and localized[key]) or MENU_TEXT.en[key] or key
+end
+
+local EDIT_MODE_TEXT = {
+    en = {
+        title = "EDIT POSITION",
+        help = "[ move with arrow keys ]\n[ resize with + and - keys ]",
+    },
+    zh = {
+        title = "调整位置",
+        help = "[ 使用方向键移动 ]\n[ 使用 + 和 - 调整大小 ]",
+    },
+}
+
+local editTextWidgetKey = nil
+local editTextLanguage = nil
+
+applyEditModeLocalization = function(actor, force)
+    if actor == nil or not isAlive(actor) then return end
+    local widget = actor.mapWidget
+    if widget == nil or not isAlive(widget) then return end
+    local language = detectMenuLanguage()
+    local widgetKey = objectKey(widget)
+    if not force and widgetKey == editTextWidgetKey and language == editTextLanguage then
+        return
+    end
+
+    local text = EDIT_MODE_TEXT[language] or EDIT_MODE_TEXT.en
+    local titleApplied = pcall(function()
+        widget.TextBlock_58:SetText(FText(text.title))
+    end)
+    local helpApplied = pcall(function()
+        widget.TextBlock:SetText(FText(text.help))
+    end)
+    if titleApplied and helpApplied then
+        editTextWidgetKey = widgetKey
+        editTextLanguage = language
+        log("edit-mode instructions localized: " .. language)
+    end
+end
+
 -- Fixed menu order (modconfig keys). Headers group the options.
 -- `label` overrides the text shown; defaults to the key.
 -- Minimap "quality" presets: each maps to a render-target resolution. Lower =
@@ -725,6 +1031,7 @@ local function buildMenu(pc)
     controls = {}
     local cfg = readConfig()
     if not cfg then return false end
+    local language = detectMenuLanguage()
 
     local world = UEHelpers.GetWorld()
     local widget = WBL():Create(world, cls("/Script/UMG.UserWidget"), pc)
@@ -777,20 +1084,21 @@ local function buildMenu(pc)
     local headerBox = newWidget(cls("/Script/UMG.VerticalBox"), tree)
     headerBorder:AddChild(headerBox)
     headerBox:AddChild(makeText(tree, "PalMiniMap", 24, UI.accent, 0, false))
-    headerBox:AddChild(makeText(tree, "Minimap configuration", 12, UI.textMuted, 0, false))
+    headerBox:AddChild(makeText(tree, menuText(language, "subtitle"), 12, UI.textMuted, 0, false))
     headerBox:AddChild(makeText(tree,
-        "[ " .. MENU_KEY_NAME .. " ] close      [ + / - ] fine zoom      scroll for more",
+        string.format(menuText(language, "help"), MENU_KEY_NAME),
         11, UI.textMuted, 0, false))
     padSlot(scroll:AddChild(headerBorder), 0, 0, 0, 8)
 
     -- Rows -----------------------------------------------------------------
     for _, item in ipairs(MENU_LAYOUT) do
         if item.header then
-            padSlot(scroll:AddChild(makeText(tree, string.upper(item.header), 13, UI.accent, 0, false)),
+            local header = menuText(language, item.header)
+            padSlot(scroll:AddChild(makeText(tree, string.upper(header), 13, UI.accent, 0, false)),
                     2, 14, 2, 5)
         else
             local entry = cfg[item.key]
-            local label = item.label or item.key
+            local label = menuText(language, item.label or item.key)
             if type(entry) == "table" and entry.type then
                 if item.quality then
                     -- quality preset slider (maps to render-target resolution)
@@ -817,7 +1125,8 @@ local function buildMenu(pc)
                     sbox:AddChild(sld)
                     alignSlot(row:AddChild(sbox), 3, 2)
 
-                    local valTxt = makeText(tree, presets[idx + 1].name, 13, UI.accent, 2, false)
+                    local valTxt = makeText(tree, menuText(language, presets[idx + 1].name),
+                                            13, UI.accent, 2, false)
                     local vbox = newWidget(cls("/Script/UMG.SizeBox"), tree)
                     pcall(function() vbox:SetWidthOverride(74.0) end)
                     vbox:AddChild(valTxt)
@@ -827,7 +1136,7 @@ local function buildMenu(pc)
                     table.insert(controls, { key = item.key, type = "quality",
                                              widget = sld, valueWidget = valTxt,
                                              presets = presets, min = 0, max = #presets - 1,
-                                             last = idx })
+                                             last = idx, language = language })
                 elseif entry.type == "boolean" or entry.type == "option" then
                     local isOn
                     if entry.type == "option" then isOn = (entry.live == "Square")
@@ -882,7 +1191,7 @@ local function buildMenu(pc)
         end
     end
 
-    padSlot(scroll:AddChild(makeText(tree, "Changes are saved and applied instantly.",
+    padSlot(scroll:AddChild(makeText(tree, menuText(language, "footer"),
             12, UI.textMuted, 1, false)), 6, 14, 6, 10)
 
     menu = widget
@@ -979,7 +1288,8 @@ local function collectChanges()
                 -- keep the readout next to the slider in sync while dragging
                 local txt
                 if c.type == "quality" and c.presets then
-                    local p = c.presets[cur + 1]; txt = p and p.name or nil
+                    local p = c.presets[cur + 1]
+                    txt = p and menuText(c.language or "en", p.name) or nil
                 elseif c.type == "integer" then
                     txt = tostring(cur)
                 end
@@ -1079,7 +1389,13 @@ end)
 LoopAsync(1000, function()
     ExecuteInGameThread(function()
         local name = currentWorldName()
-        if name == nil then return end
+        if name == nil then
+            -- During shutdown the UWorld can disappear before UE4SS stops its
+            -- Lua timers. Drop references without calling into dying UObjects.
+            cachedActor = nil
+            dropMenuRefs()
+            return
+        end
         if name ~= worldName then
             -- world changed: the old actor and widget died with it. Clear
             -- every cached reference so nothing stale is ever touched.
@@ -1090,6 +1406,10 @@ LoopAsync(1000, function()
             lastCaptureActive = nil
             captureAppliedFor = nil
             rtSizedFor = nil
+            visualActorKey, visualWidgetKey = nil, nil
+            visualActorOpacity, visualActorSquare = nil, nil
+            visualOpacity, visualSquare = nil, nil
+            editTextWidgetKey, editTextLanguage = nil, nil
             lastCapX, lastCapY, lastCapZ, lastCapYaw, lastCapOrtho = nil, nil, nil, nil, nil
             lastCapTime = 0.0
             captureGen = captureGen + 1  -- stop any orphaned capture loop
@@ -1097,6 +1417,15 @@ LoopAsync(1000, function()
         elseif menuOpen and not menuUsable() then
             -- same-name world swap (e.g. logout/login): widget is gone
             dropMenuRefs()
+        end
+        -- Splash/login/title actors are short-lived and can be destroyed while
+        -- UE4SS callbacks are still queued. No minimap maintenance is needed
+        -- there, so never touch their widget or reflected fields.
+        if NON_GAME_WORLDS[name] then return end
+        local actor = getModActor()
+        if actor then
+            pcall(function() applyMinimapVisualSettings(actor, false) end)
+            pcall(function() applyEditModeLocalization(actor, false) end)
         end
         -- Terrain capture is left to the stock blueprint. The config menu is
         -- opened/closed only with F5 (no auto-open on the title screen).
