@@ -2,6 +2,13 @@ PalMiniMap - a minimap radar for Palworld 1.0.x
 Based on Paldar by T3R3NC3B.
 
 ===================================================================
+WHAT'S NEW IN v1.2.1
+===================================================================
+- Fixes a crash when loading into the world. The mod could touch the
+  minimap actor while it was still initialising, which hard-crashes the
+  game; it now waits until the actor is fully ready before touching it.
+
+===================================================================
 WHAT'S NEW IN v1.2.0
 ===================================================================
 - In-game menu is now localized (English and Simplified Chinese),
@@ -116,7 +123,11 @@ Delete the six files listed above (and the two PalMiniMap folders).
 ===================================================================
 USAGE
 ===================================================================
-- Config menu opens on the title screen and with F5 in-game.
+- Config menu: open/close with F5 in-game.
+- Minimap quality selector (Very Low ... Ultra): lower it if you get
+  stutter/freezing - it cuts the minimap's GPU cost.
+- "Hide collected items": chests, eggs, notes and lifmunk effigies leave
+  the minimap once you collect them (only shows what's still in the world).
 - In minimap edit mode (K): move with arrow keys, resize with + / - .
 - Fine zoom: press + / - while playing. Z toggles megazoom.
 - Settings persist across mod updates (kept in Paldar.modconfig.json,

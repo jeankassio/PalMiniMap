@@ -52,6 +52,13 @@ UNINSTALL
 Delete the files listed above (and the two PalMiniMap folders).
 
 ===================================================================
+WHAT'S NEW IN v1.2.1
+===================================================================
+- Fixes a crash when loading into the world. The mod could touch the
+  minimap actor while it was still initialising, which hard-crashes the
+  game; it now waits until the actor is fully ready before touching it.
+
+===================================================================
 WHAT'S NEW IN v1.2.0
 ===================================================================
 - In-game menu is now localized (English and Simplified Chinese),
