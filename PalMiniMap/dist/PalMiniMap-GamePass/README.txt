@@ -45,6 +45,16 @@ UNINSTALL
 Delete the files listed above (and the two PalMiniMap folders).
 
 ===================================================================
+WHAT'S NEW IN v1.1.1
+===================================================================
+- Reliability: background tasks that error are now logged and skipped
+  instead of silently stopping (e.g. "hide collected items" keeps working).
+- Performance: cheaper every-frame minimap render (capture LOD bias) to
+  help camera-movement stutter. For more FPS, also lower "Minimap quality"
+  and turn off icon types you don't need.
+- Effigy/note icons are removed once you collect them.
+
+===================================================================
 USAGE
 ===================================================================
 - Config menu: open/close with F5 in-game.

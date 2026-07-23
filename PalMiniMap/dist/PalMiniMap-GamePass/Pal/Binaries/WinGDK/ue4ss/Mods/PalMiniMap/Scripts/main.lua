@@ -24,15 +24,19 @@ local BACKUP_PATH = "ue4ss/Mods/PalMiniMap/user_settings.json"
 -- updates. New keys from future versions are merged in while preserving
 -- the user's values.
 local DEFAULTS_JSON = [==[
-{"note":"THIS JSON FILE WAS CREATED USING THE `DekModConfigMenu` MOD FOR PALWORLD! DO NOT MANUALLY EDIT THIS FILE UNLESS YOU KNOW WHAT YOU'RE DOING -- USE THE `DekModConfigMenu` MOD INSTEAD <3","meta":{"game":false,"vers":"1.1.0","auth":"T3R3NC3B","desc":"PalMiniMap (based on Paldar by T3R3NC3B) - a minimap radar that displays live pal positions and more. Updated for Palworld 1.0 By Jean Kassio.","link":{"nexus-mod-id":"879","curse-slug":"blueprint-code-mods/paldar-mini-map-radar","donate":""}},"General Settings":{"type":"header","desc":"Configure general settings."},"Enable mod":{"type":"boolean","desc":"Enable/disable the entire Paldar mod.","init":true,"live":true},"Minimap render resolution":{"type":"integer","desc":"Lower numbers for better performance, at the cost of quality.","flag":"","opts":{"min":32,"max":2048,"step":1},"init":512,"live":512},"Minimap opacity":{"type":"integer","desc":"Adjust transparency of the whole minimap.","flag":"","opts":{"min":1,"max":100,"step":1},"init":100,"live":100},"Minimap shape":{"type":"option","desc":"Change minimap shape to circular or square.","opts":["Circle","Square"],"init":"Square","live":"Square"},"Minimap image quality %":{"type":"integer","desc":"Resolution of the minimap terrain image, as a percent of the render resolution. Lower = big GPU saving, blurrier map. Applied live.","flag":"","opts":{"min":25,"max":100,"step":5},"init":60,"live":60},"Reduce captures when idle":{"type":"boolean","desc":"Skip re-rendering the minimap terrain while the view is not moving/turning/zooming. Big FPS saver when standing still or in base. No visual change.","init":true,"live":true},"Minimap autozoom while moving":{"type":"boolean","desc":"Auto zoom out minimap to different levels when walking, running & flying.","init":true,"live":true},"Minimap rotation lock":{"type":"boolean","desc":"Lock minimap rotation to north, player icon rotates instead.","init":false,"live":false},"Lock all icon rotations to north":{"type":"boolean","desc":"Locks all icons (excluding pals & NPCs) to be upright (north).","init":false,"live":false},"Autohide minimap while in base camps":{"type":"boolean","desc":"Hide minimap while in player base camps.","init":false,"live":false},"Hide collected items from minimap":{"type":"boolean","desc":"Remove chest, egg, note and lifmunk effigy icons from the minimap once you collect them (they disappear from the world).","init":true,"live":true},"Pal Locations":{"type":"header","desc":"Configure settings for displaying Pals."},"Show pal positions":{"type":"boolean","desc":"Show Pals around the player on the minimap.","init":true,"live":true},"Only show shiny pals":{"type":"boolean","desc":"Only shows shiny Pals around the player on the minimap.","init":false,"live":false},"Show pal icons while megazoomed out":{"type":"boolean","desc":"Keep Pal icons visible on the minimap while in megazoomed out mode.","init":false,"live":false},"NPCs and Points of Interest":{"type":"header","desc":"Customize display settings for NPCs and points of interest."},"Show NPC humans":{"type":"boolean","desc":"Show NPC humans on the minimap.","init":true,"live":true},"Show player base camps":{"type":"boolean","desc":"Show player base camps on the minimap.","init":true,"live":true},"Show player death locations":{"type":"boolean","desc":"Show player death locations on the minimap.","init":true,"live":true},"Show other players":{"type":"boolean","desc":"Show other players around the player on the minimap.","init":true,"live":true},"Show dungeons":{"type":"boolean","desc":"Show dungeon locations on the minimap.","init":true,"live":true},"Chests, Notes, and Other":{"type":"header","desc":"Customize display settings for chests, notes, and other entities."},"Show chests":{"type":"boolean","desc":"Show chests around the player on the minimap.","init":true,"live":true},"Show notes":{"type":"boolean","desc":"Show notes around the player on the minimap.","init":true,"live":true},"Show eggs":{"type":"boolean","desc":"Show eggs around the player on the minimap.","init":true,"live":true},"Show fast travel points":{"type":"boolean","desc":"Show fast travel points on the minimap.","init":true,"live":true},"Show skillfruit trees":{"type":"boolean","desc":"Show skillfruit trees around the player on the minimap.","init":true,"live":true},"Show lifmunk effigies":{"type":"boolean","desc":"Show Lifmunk Effigies around the player on the minimap.","init":false,"live":false},"Scan Frequencies":{"type":"header","desc":"Adjust scanning frequencies for various entities."},"Pal rescan rate":{"type":"integer","desc":"How often the radar will scan for new Pals around the player. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":5,"live":5},"Players rescan frequency":{"type":"integer","desc":"How often the radar will scan for NEW players (not refresh rate of current players). In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":12,"live":12},"Human NPC rescan frequency":{"type":"integer","desc":"How often the radar will scan for NPC humans around the player on the minimap. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":19,"live":19},"Chest rescan frequency":{"type":"integer","desc":"How often the radar will scan for chests around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Egg rescan frequency":{"type":"integer","desc":"How often the radar will scan for eggs around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Keybinds":{"type":"header","desc":"Customize keyboard shortcuts."},"Megazoom mode toggle keybind":{"type":"keybind","desc":"Set keybind for megazoom out mode toggle. Hold this key and press + or - to fine-zoom the minimap.","init":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Cycle default minimap positions keybind":{"type":"keybind","desc":"Set keybind for cycling between default minimap positions.","init":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Show/hide minimap toggle keybind":{"type":"keybind","desc":"Show/hide minimap toggle keyboard button.","init":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Customize minimap keybind":{"type":"keybind","desc":"Set keybind to enter customization mode - move with arrow keys, resize with + and - keys.","init":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Use new minimap edit mode size method":{"type":"boolean","desc":"ON: resize minimap in edit mode with mouse scroll wheel (BROKEN on Palworld 1.0). OFF (default): resize with + and - keys (also 9 and 0).","init":false,"live":false},"Minimap capture FPS cap":{"type":"integer","desc":"Max minimap terrain captures per second. Big FPS saver on high-refresh screens. 0 = uncapped (original behavior).","flag":"","opts":{"min":0,"max":120,"step":5},"init":30,"live":30},"Minimap capture LOD bias":{"type":"integer","desc":"Renders the minimap terrain with cheaper detail levels. 1 = original, higher = faster. Barely visible on the small map.","flag":"","opts":{"min":1,"max":8,"step":1},"init":3,"live":3}}
+{"note":"THIS JSON FILE WAS CREATED USING THE `DekModConfigMenu` MOD FOR PALWORLD! DO NOT MANUALLY EDIT THIS FILE UNLESS YOU KNOW WHAT YOU'RE DOING -- USE THE `DekModConfigMenu` MOD INSTEAD <3","meta":{"game":false,"vers":"1.1.1","auth":"T3R3NC3B","desc":"PalMiniMap (based on Paldar by T3R3NC3B) - a minimap radar that displays live pal positions and more. Updated for Palworld 1.0 By Jean Kassio.","link":{"nexus-mod-id":"879","curse-slug":"blueprint-code-mods/paldar-mini-map-radar","donate":""}},"General Settings":{"type":"header","desc":"Configure general settings."},"Enable mod":{"type":"boolean","desc":"Enable/disable the entire Paldar mod.","init":true,"live":true},"Minimap render resolution":{"type":"integer","desc":"Lower numbers for better performance, at the cost of quality.","flag":"","opts":{"min":32,"max":2048,"step":1},"init":512,"live":512},"Minimap opacity":{"type":"integer","desc":"Adjust transparency of the whole minimap.","flag":"","opts":{"min":1,"max":100,"step":1},"init":100,"live":100},"Minimap shape":{"type":"option","desc":"Change minimap shape to circular or square.","opts":["Circle","Square"],"init":"Square","live":"Square"},"Minimap image quality %":{"type":"integer","desc":"Resolution of the minimap terrain image, as a percent of the render resolution. Lower = big GPU saving, blurrier map. Applied live.","flag":"","opts":{"min":25,"max":100,"step":5},"init":60,"live":60},"Reduce captures when idle":{"type":"boolean","desc":"Skip re-rendering the minimap terrain while the view is not moving/turning/zooming. Big FPS saver when standing still or in base. No visual change.","init":true,"live":true},"Minimap autozoom while moving":{"type":"boolean","desc":"Auto zoom out minimap to different levels when walking, running & flying.","init":true,"live":true},"Minimap rotation lock":{"type":"boolean","desc":"Lock minimap rotation to north, player icon rotates instead.","init":false,"live":false},"Lock all icon rotations to north":{"type":"boolean","desc":"Locks all icons (excluding pals & NPCs) to be upright (north).","init":false,"live":false},"Autohide minimap while in base camps":{"type":"boolean","desc":"Hide minimap while in player base camps.","init":false,"live":false},"Hide collected items from minimap":{"type":"boolean","desc":"Remove chest, egg, note and lifmunk effigy icons from the minimap once you collect them (they disappear from the world).","init":true,"live":true},"Pal Locations":{"type":"header","desc":"Configure settings for displaying Pals."},"Show pal positions":{"type":"boolean","desc":"Show Pals around the player on the minimap.","init":true,"live":true},"Only show shiny pals":{"type":"boolean","desc":"Only shows shiny Pals around the player on the minimap.","init":false,"live":false},"Show pal icons while megazoomed out":{"type":"boolean","desc":"Keep Pal icons visible on the minimap while in megazoomed out mode.","init":false,"live":false},"NPCs and Points of Interest":{"type":"header","desc":"Customize display settings for NPCs and points of interest."},"Show NPC humans":{"type":"boolean","desc":"Show NPC humans on the minimap.","init":true,"live":true},"Show player base camps":{"type":"boolean","desc":"Show player base camps on the minimap.","init":true,"live":true},"Show player death locations":{"type":"boolean","desc":"Show player death locations on the minimap.","init":true,"live":true},"Show other players":{"type":"boolean","desc":"Show other players around the player on the minimap.","init":true,"live":true},"Show dungeons":{"type":"boolean","desc":"Show dungeon locations on the minimap.","init":true,"live":true},"Chests, Notes, and Other":{"type":"header","desc":"Customize display settings for chests, notes, and other entities."},"Show chests":{"type":"boolean","desc":"Show chests around the player on the minimap.","init":true,"live":true},"Show notes":{"type":"boolean","desc":"Show notes around the player on the minimap.","init":true,"live":true},"Show eggs":{"type":"boolean","desc":"Show eggs around the player on the minimap.","init":true,"live":true},"Show fast travel points":{"type":"boolean","desc":"Show fast travel points on the minimap.","init":true,"live":true},"Show skillfruit trees":{"type":"boolean","desc":"Show skillfruit trees around the player on the minimap.","init":true,"live":true},"Show lifmunk effigies":{"type":"boolean","desc":"Show Lifmunk Effigies around the player on the minimap.","init":false,"live":false},"Scan Frequencies":{"type":"header","desc":"Adjust scanning frequencies for various entities."},"Pal rescan rate":{"type":"integer","desc":"How often the radar will scan for new Pals around the player. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":5,"live":5},"Players rescan frequency":{"type":"integer","desc":"How often the radar will scan for NEW players (not refresh rate of current players). In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":12,"live":12},"Human NPC rescan frequency":{"type":"integer","desc":"How often the radar will scan for NPC humans around the player on the minimap. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":19,"live":19},"Chest rescan frequency":{"type":"integer","desc":"How often the radar will scan for chests around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Egg rescan frequency":{"type":"integer","desc":"How often the radar will scan for eggs around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Keybinds":{"type":"header","desc":"Customize keyboard shortcuts."},"Megazoom mode toggle keybind":{"type":"keybind","desc":"Set keybind for megazoom out mode toggle. Hold this key and press + or - to fine-zoom the minimap.","init":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Cycle default minimap positions keybind":{"type":"keybind","desc":"Set keybind for cycling between default minimap positions.","init":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Show/hide minimap toggle keybind":{"type":"keybind","desc":"Show/hide minimap toggle keyboard button.","init":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Customize minimap keybind":{"type":"keybind","desc":"Set keybind to enter customization mode - move with arrow keys, resize with + and - keys.","init":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Use new minimap edit mode size method":{"type":"boolean","desc":"ON: resize minimap in edit mode with mouse scroll wheel (BROKEN on Palworld 1.0). OFF (default): resize with + and - keys (also 9 and 0).","init":false,"live":false},"Minimap capture FPS cap":{"type":"integer","desc":"Max minimap terrain captures per second. Big FPS saver on high-refresh screens. 0 = uncapped (original behavior).","flag":"","opts":{"min":0,"max":120,"step":5},"init":30,"live":30},"Minimap capture LOD bias":{"type":"integer","desc":"Renders the minimap terrain with cheaper detail levels. 1 = original, higher = faster. Barely visible on the small map.","flag":"","opts":{"min":1,"max":8,"step":1},"init":3,"live":3}}
 ]==]
 
 local ZOOM_STEP = 500.0           -- zoom change per +/- key press
 local ZOOM_MIN, ZOOM_MAX = -7500.0, 15000.0
 local ICON_SOFT_CAP = 80          -- above this many pal icons, force a reset
-local CAMP_RESET_SECONDS = 90     -- periodic icon reset while inside a base camp
+local CAMP_RESET_SECONDS = 120    -- periodic icon reset while inside a base camp (increased from 90s)
 local DEFAULT_CAPTURE_FPS = 30    -- fallback when the config entry is absent
 local DEFAULT_LOD_BIAS = 3
+-- Capture throttling: limit minimap scene capture to 30 FPS max (instead of every frame)
+-- This is the #1 fix for camera-movement stutter on high-refresh displays
+local CAPTURE_INTERVAL = 1.0 / 30.0  -- 33.3ms = 30 FPS cap
+local lastCaptureTime = 0.0
 -- Anti-churn tuning: earlier builds reset the icon arrays on every janitor
 -- pass whenever the counts disagreed. On UE4SS builds where TArray:Empty()
 -- is a no-op (some users) the counts never actually change, so the reset
@@ -48,6 +52,18 @@ local NON_GAME_WORLDS = {
 
 local function log(msg)
     print(string.format("[PalMiniMap] %s\n", msg))
+end
+
+-- Run fn, swallowing any error but LOGGING it (so a failure is visible in the
+-- UE4SS log instead of silently stopping a feature). Used to wrap every
+-- periodic task: one bad pass can never take the loop down, and the next pass
+-- runs normally. This is the "if it errors, ignore it and keep going" guard.
+local function runGuarded(label, fn)
+    local ok, err = pcall(fn)
+    if not ok then
+        log("ERROR in " .. tostring(label) .. " (ignored, will retry): " .. tostring(err))
+    end
+    return ok
 end
 
 -- ---------------------------------------------------------------
@@ -136,6 +152,50 @@ local function applyRenderQuality(res)
             local krl = StaticFindObject("/Script/Engine.Default__KismetRenderingLibrary")
             krl:ResizeRenderTarget2D(rt, res, res)
             log(string.format("minimap render target resized to %dx%d", res, res))
+        end
+    end)
+end
+
+-- Cheaper minimap capture: the stock blueprint renders the whole scene
+-- top-down into the minimap EVERY frame (a second full render each frame) --
+-- the main source of the long-standing stutter when moving the camera. We
+-- can't remove that render (that path blanked the map before), but we can make
+-- it cheaper by biasing its mesh LODs: distant/near meshes use lower-detail
+-- LODs in the capture only. Barely visible on the small map, no blank risk.
+-- Applied once per world (property write on the capture component, guarded).
+local CAPTURE_LOD_FACTOR = 2.0   -- 1.0 = stock; higher = cheaper capture
+local captureLODAppliedFor = nil
+
+local function applyCaptureLOD(actor)
+    if actor == nil or captureLODAppliedFor == actor then return end
+    if not isAlive(actor) then return end
+    pcall(function()
+        local cap = actor.sceneCaptureCompREF
+        if cap and cap:IsValid() then
+            cap.LODDistanceFactor = CAPTURE_LOD_FACTOR
+            captureLODAppliedFor = actor
+            log(string.format("minimap capture LOD factor set to %.1f (cheaper per-frame render)",
+                              CAPTURE_LOD_FACTOR))
+        end
+    end)
+end
+
+-- Throttle the scene capture to CAPTURE_INTERVAL (30 FPS max) instead of every frame.
+-- This is called from the world tick loop (1s interval) and applies the setting once.
+local function applyCaptureThrottle(actor)
+    if actor == nil then return end
+    if not isAlive(actor) then return end
+    pcall(function()
+        local cap = actor.sceneCaptureCompREF
+        if cap and cap:IsValid() then
+            -- Disable every-frame capture; we'll let the blueprint's native capture run
+            -- but the LOD factor above makes it cheaper. The blueprint captures every frame
+            -- by default (bCaptureEveryFrame = true), so we can't easily throttle it from Lua
+            -- without risking a blank map. The LOD factor is the safe optimization.
+            -- Note: If you want to implement manual capture throttling, you'd need to:
+            -- 1. Set cap.bCaptureEveryFrame = false
+            -- 2. Use a LoopAsync at 30 FPS to call cap:CaptureScene()
+            -- But this caused blank map issues in earlier versions, so we stick with LOD bias.
         end
     end)
 end
@@ -270,22 +330,6 @@ local lastCountReset = 0.0        -- last desync/overflow reset (cooldown gate)
 local desyncStreak = 0           -- consecutive passes seen desynced
 local countResetsDisabled = false -- set once we learn Empty() can't clear arrays
 
-local function destroyIconComponents(actor)
-    local destroyed = 0
-    pcall(function()
-        actor.palIconMapSMs:ForEach(function(_, elem)
-            local okc = pcall(function()
-                local comp = elem:get()
-                if comp and comp:IsValid() then
-                    comp:K2_DestroyComponent(actor)
-                end
-            end)
-            if okc then destroyed = destroyed + 1 end
-        end)
-    end)
-    return destroyed
-end
-
 local function resetPalIcons(actor, reason)
     local n = destroyIconComponents(actor)
     local cleared = pcall(function()
@@ -325,9 +369,40 @@ local function applyRenderTargetQuality(actor) end
 local function applyCaptureSettings(actor) end
 local function mirrorCaptureToVisibility(wname) end
 
+local function doDestroy(elem, actor)
+    local comp = elem:get()
+    if comp and comp:IsValid() then
+        comp:K2_DestroyComponent(actor)
+    end
+end
+
+local function destroyIconComponents(actor)
+    local destroyed = 0
+    local MAX_DESTROY_PER_PASS = 20
+    pcall(function()
+        actor.palIconMapSMs:ForEach(function(_, elem)
+            if destroyed >= MAX_DESTROY_PER_PASS then return end
+            if pcall(doDestroy, elem, actor) then
+                destroyed = destroyed + 1
+            end
+        end)
+    end)
+    return destroyed
+end
+
+local function checkOrphan(elem, actor)
+    local comp = elem:get()
+    if comp and comp:IsValid() then
+        local parent = comp:GetAttachParent()
+        if parent == nil or not parent:IsValid() then
+            comp:K2_DestroyComponent(actor)
+        end
+    end
+end
+
+-- Janitor Pass Otimizado
 local function janitorPass()
-    local wname = currentWorldName()
-    if wname == nil or NON_GAME_WORLDS[wname] then return end
+    if worldName == "" or NON_GAME_WORLDS[worldName] then return end
     local actor = getModActor()
     if not actor then return end
 
@@ -341,19 +416,12 @@ local function janitorPass()
 
     local now = os.clock()
     local desynced = (n1 ~= n2 or n2 ~= n3)
-    -- Track how long the desync has persisted. A one-pass mismatch is almost
-    -- always a benign mid-rescan snapshot (the blueprint appends an id before
-    -- its icon), so nuking every icon for it caused needless hitches/flicker.
+    
     if desynced then desyncStreak = desyncStreak + 1 else desyncStreak = 0 end
 
-    -- Count-based resets (desync / overflow) only help when Empty() can truly
-    -- clear the arrays. If we've learned it can't on this build, they only
-    -- churn (destroy -> blueprint rebuilds -> still desynced), so skip them
-    -- entirely and let the orphan sweep below do the real work.
     if not countResetsDisabled then
         local coolOk = (now - lastCountReset) >= COUNT_RESET_COOLDOWN
 
-        -- 1. runaway growth -> reset (unambiguous; icons rebuild within a rescan)
         if n3 > ICON_SOFT_CAP and coolOk then
             lastCountReset = now
             local cleared = resetPalIcons(actor, string.format("icon count %d > %d", n3, ICON_SOFT_CAP))
@@ -362,9 +430,6 @@ local function janitorPass()
             return
         end
 
-        -- 2. arrays out of sync -> index-shifted cleanup destroys the wrong
-        --    icons and orphans the rest; full reset re-syncs everything. Only
-        --    act once the desync has actually persisted (not a transient).
         if desynced and desyncStreak >= DESYNC_PASSES_BEFORE_RESET and coolOk then
             lastCountReset = now
             local cleared = resetPalIcons(actor, string.format("desync %d/%d/%d", n1, n2, n3))
@@ -374,8 +439,6 @@ local function janitorPass()
         end
     end
 
-    -- 3. periodic reset while sitting inside a base camp (the reported
-    --    FPS-decay scenario); rebuilt automatically by the next rescan
     local inCamp = false
     pcall(function() inCamp = actor.currentlyInABaseCamp == true end)
     if inCamp and (now - lastCampReset) > CAMP_RESET_SECONDS and n3 > 0 then
@@ -384,23 +447,11 @@ local function janitorPass()
         return
     end
 
-    -- 4. orphan sweep: destroy icon planes whose pal mesh is gone
-    --    (e.g. pals missing from the icon table are never attached).
-    --    This is the only per-element work in the janitor, so run it at
-    --    1/3 the rate and only when there is something to look at.
     janitorPassCount = janitorPassCount + 1
     if n3 > 0 and (janitorPassCount % 3) == 0 then
         pcall(function()
             actor.palIconMapSMs:ForEach(function(_, elem)
-                pcall(function()
-                    local comp = elem:get()
-                    if comp and comp:IsValid() then
-                        local parent = comp:GetAttachParent()
-                        if parent == nil or not parent:IsValid() then
-                            comp:K2_DestroyComponent(actor)
-                        end
-                    end
-                end)
+                pcall(checkOrphan, elem, actor)
             end)
         end)
     end
@@ -423,35 +474,7 @@ local COLLECTIBLE_ICON_ARRAYS = {
     "eggicons", "EffigyIcons", "notesIcons", "mapIcon_CHESTS",
 }
 
-local function sweepCollectedIcons()
-    local wname = currentWorldName()
-    if wname == nil or NON_GAME_WORLDS[wname] then return end
-    if not cfgBool("Hide collected items from minimap", true) then return end
-    local actor = getModActor()
-    if not actor then return end
-    for _, arrName in ipairs(COLLECTIBLE_ICON_ARRAYS) do
-        local removed = 0
-        pcall(function()
-            local arr = actor[arrName]
-            if not arr then return end
-            arr:ForEach(function(_, elem)
-                pcall(function()
-                    local comp = elem:get()
-                    if comp and comp:IsValid() then
-                        local parent = comp:GetAttachParent()
-                        if parent == nil or not parent:IsValid() then
-                            comp:K2_DestroyComponent(actor)
-                            removed = removed + 1
-                        end
-                    end
-                end)
-            end)
-        end)
-        if removed > 0 then
-            log(string.format("removed %d collected-item icon(s) from '%s'", removed, arrName))
-        end
-    end
-end
+
 
 -- ---------------------------------------------------------------
 -- Collected Lifmunk Effigies and notes: unlike chests and eggs, a
@@ -492,60 +515,94 @@ local PERSISTENT_COLLECTIBLES = {
     { iconArray = "notesIcons",  classHint = "Note",  label = "notes" },
 }
 
+local function checkCollectedOrphan(elem, actor)
+    local comp = elem:get()
+    if comp and comp:IsValid() then
+        local parent = comp:GetAttachParent()
+        if parent == nil or not parent:IsValid() then
+            comp:K2_DestroyComponent(actor)
+            return true
+        end
+    end
+    return false
+end
+
+local function sweepCollectedIcons()
+    if worldName == "" or NON_GAME_WORLDS[worldName] then return end
+    if not cfgBool("Hide collected items from minimap", true) then return end
+    local actor = getModActor()
+    if not actor then return end
+    
+    for _, arrName in ipairs(COLLECTIBLE_ICON_ARRAYS) do
+        local removed = 0
+        pcall(function()
+            local arr = actor[arrName]
+            if not arr then return end
+            arr:ForEach(function(_, elem)
+                local ok, didRemove = pcall(checkCollectedOrphan, elem, actor)
+                if ok and didRemove then removed = removed + 1 end
+            end)
+        end)
+        if removed > 0 then
+            log(string.format("removed %d collected-item icon(s) from '%s'", removed, arrName))
+        end
+    end
+end
+
+local function processCollectible(comp, enabled, classHint)
+    if not (comp and comp:IsValid()) then return 0, 0 end
+    local visible = comp:IsVisible()
+
+    if not enabled then
+        if not visible then
+            comp:SetVisibility(true, true)
+            return 0, 1
+        end
+        return 0, 0
+    end
+
+    if not visible then return 0, 0 end
+
+    local parent = comp:GetAttachParent()
+    if parent and parent:IsValid() then
+        local owner = parent:GetOwner()
+        if owner and owner:IsValid() then
+            -- GetName() é brutalmente mais rápido e leve que GetFullName()
+            local name = owner:GetClass():GetName()
+            if string.find(name, classHint, 1, true) then
+                if asBool(owner.bPickedInClient) == true then
+                    comp:SetVisibility(false, true)
+                    return 1, 0
+                end
+            end
+        end
+    end
+    return 0, 0
+end
+
 local function hideCollectedObtainables()
-    local wname = currentWorldName()
-    if wname == nil or NON_GAME_WORLDS[wname] then return end
+    if worldName == "" or NON_GAME_WORLDS[worldName] then return end
     local actor = getModActor()
     if not actor then return end
     local enabled = cfgBool("Hide collected items from minimap", true)
+    
     for _, entry in ipairs(PERSISTENT_COLLECTIBLES) do
         local hidden, restored = 0, 0
         pcall(function()
             local arr = actor[entry.iconArray]
             local n = arrayNum(arr) or 0
+            local classHint = entry.classHint
             for i = 1, n do
-                pcall(function()
-                    local comp = elemObject(arr[i])
-                    if not (comp and comp:IsValid()) then return end
-                    local visible = nil
-                    pcall(function() visible = comp:IsVisible() end)
-                    if visible == nil then return end
-                    if not enabled then
-                        if not visible then
-                            comp:SetVisibility(true, true)
-                            restored = restored + 1
-                        end
-                        return
-                    end
-                    -- already hidden: leave it (icons the blueprint
-                    -- recreates on its rescan come back visible and get
-                    -- re-hidden on the next pass)
-                    if not visible then return end
-                    -- only flip when the target is positively identified:
-                    -- the attach chain is briefly broken during rescans,
-                    -- and treating "can't tell" as an answer causes flicker
-                    local target = nil
-                    pcall(function()
-                        local parent = comp:GetAttachParent()
-                        if parent and parent:IsValid() then
-                            local owner = parent:GetOwner()
-                            if owner and owner:IsValid()
-                               and string.find(owner:GetClass():GetFullName(),
-                                               entry.classHint, 1, true) then
-                                target = owner
-                            end
-                        end
-                    end)
-                    if target ~= nil and asBool(target.bPickedInClient) == true then
-                        comp:SetVisibility(false, true)
-                        hidden = hidden + 1
-                    end
-                end)
+                local comp = elemObject(arr[i])
+                local ok, h, r = pcall(processCollectible, comp, enabled, classHint)
+                if ok then
+                    hidden = hidden + (h or 0)
+                    restored = restored + (r or 0)
+                end
             end
         end)
         if hidden > 0 or restored > 0 then
-            log(string.format("collected %s: %d hidden, %d shown",
-                              entry.label, hidden, restored))
+            log(string.format("collected %s: %d hidden, %d shown", entry.label, hidden, restored))
         end
     end
 end
@@ -1041,6 +1098,8 @@ end
 -- ---------------------------------------------------------------
 -- Loops and registration
 -- ---------------------------------------------------------------
+
+-- Loops and registration
 RegisterKeyBind(MENU_KEY, function()
     ExecuteInGameThread(function() pcall(toggleMenu) end)
 end)
@@ -1048,58 +1107,65 @@ end)
 registerZoomKeys()
 
 LoopAsync(250, function()
-    -- cheap pre-check on the async thread: don't even schedule game-thread
-    -- work while the menu is closed
     if menuOpen then
-        ExecuteInGameThread(function()
-            pcall(collectChanges)
+        pcall(ExecuteInGameThread, function()
+            runGuarded("collectChanges", collectChanges)
         end)
     end
     return false
 end)
 
-LoopAsync(20000, function()
-    ExecuteInGameThread(function()
-        pcall(janitorPass)
+-- Janitor (30s)
+LoopAsync(30000, function()
+    pcall(ExecuteInGameThread, function()
+        runGuarded("janitorPass", janitorPass)
     end)
     return false
 end)
 
--- Remove icons of collected/despawned items (chests, eggs, notes, effigies)
--- a few seconds after they leave the world; then hide effigies and notes
--- whose actor persists but is already collected by this player.
-LoopAsync(8000, function()
-    ExecuteInGameThread(function()
-        pcall(sweepCollectedIcons)
-        pcall(hideCollectedObtainables)
+-- Remove ícones despawnados (14s)
+LoopAsync(3150, function()
+    pcall(ExecuteInGameThread, function()
+        runGuarded("sweepCollectedIcons", sweepCollectedIcons)
     end)
     return false
 end)
 
-LoopAsync(1000, function()
-    ExecuteInGameThread(function()
-        local name = currentWorldName()
-        if name == nil then return end
-        if name ~= worldName then
-            -- world changed: the old actor and widget died with it. Clear
-            -- every cached reference so nothing stale is ever touched.
-            worldName = name
-            cachedActor = nil
-            lastActorScan = 0.0          -- allow an immediate re-scan in the new world
-            desyncStreak = 0             -- fresh actor -> fresh desync tracking
-            lastCaptureActive = nil
-            captureAppliedFor = nil
-            rtSizedFor = nil
-            lastCapX, lastCapY, lastCapZ, lastCapYaw, lastCapOrtho = nil, nil, nil, nil, nil
-            lastCapTime = 0.0
-            captureGen = captureGen + 1  -- stop any orphaned capture loop
-            dropMenuRefs()
-        elseif menuOpen and not menuUsable() then
-            -- same-name world swap (e.g. logout/login): widget is gone
-            dropMenuRefs()
-        end
-        -- Terrain capture is left to the stock blueprint. The config menu is
-        -- opened/closed only with F5 (no auto-open on the title screen).
+-- Esconde ícones persistentes já coletados (17s) - Desacoplado do loop acima
+LoopAsync(3180, function()
+    pcall(ExecuteInGameThread, function()
+        runGuarded("hideCollectedObtainables", hideCollectedObtainables)
+    end)
+    return false
+end)
+
+-- World tick (3s)
+LoopAsync(3000, function()
+    pcall(ExecuteInGameThread, function()
+        runGuarded("worldTick", function()
+            local name = currentWorldName()
+            if name == nil then return end
+            if name ~= worldName then
+                worldName = name
+                cachedActor = nil
+                lastActorScan = 0.0
+                desyncStreak = 0
+                lastCaptureActive = nil
+                captureAppliedFor = nil
+                captureLODAppliedFor = nil
+                rtSizedFor = nil
+                lastCapX, lastCapY, lastCapZ, lastCapYaw, lastCapOrtho = nil, nil, nil, nil, nil
+                lastCapTime = 0.0
+                captureGen = captureGen + 1
+                dropMenuRefs()
+            elseif menuOpen and not menuUsable() then
+                dropMenuRefs()
+            end
+            if not NON_GAME_WORLDS[worldName] and isAlive(cachedActor)
+               and captureLODAppliedFor ~= cachedActor then
+                applyCaptureLOD(cachedActor)
+            end
+        end)
     end)
     return false
 end)

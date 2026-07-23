@@ -1,3 +1,9 @@
-Extract the contents of the folder into the Palworld installation location.
-Usually found at:
-C:/Program Files (x86)/Steam/steamapps/common/Palworld
+GAME PASS / Microsoft Store (WinGDK) version.
+
+Extract the contents of this folder into your Game Pass Palworld folder -
+the folder that CONTAINS "Pal". Usually found at:
+C:/XboxGames/Palworld/Content
+
+You also need the WinGDK (XInput) build of UE4SS installed in
+Pal/Binaries/WinGDK (rename XInput1_3.dll to XInput1_4.dll).
+See README.txt for the full steps.

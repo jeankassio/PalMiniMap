@@ -2,6 +2,18 @@ PalMiniMap - a minimap radar for Palworld 1.0.x
 Based on Paldar by T3R3NC3B.
 
 ===================================================================
+WHAT'S NEW IN v1.1.1
+===================================================================
+- Reliability: if a background task ever errors, it is now logged and
+  skipped instead of silently stopping - so features like "hide collected
+  items" keep working for the rest of the session.
+- Performance: the minimap's every-frame render now uses cheaper detail
+  (capture LOD bias), which helps the camera-movement stutter. For more
+  FPS, also lower the "Minimap quality" slider and turn off icon types
+  you don't need.
+- Effigy/note icons are removed once you collect them (community fix).
+
+===================================================================
 WHAT'S NEW IN v1.1.0
 ===================================================================
 - New: collected items now disappear from the minimap. When you pick up
