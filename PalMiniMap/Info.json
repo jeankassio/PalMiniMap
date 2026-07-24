@@ -2,7 +2,7 @@
   "ModName": "PalMiniMap",
   "PackageName": "PalMiniMap",
   "Thumbnail": "thumbnail.png",
-  "Version": "v1.2.2",
+  "Version": "v1.2.3",
   "MinRevision": 82182,
   "Author": "Jean Kassio",
   "Dependencies": [

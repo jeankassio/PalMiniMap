@@ -39,7 +39,7 @@ local BACKUP_PATH = SCRIPT_DIRECTORY and (SCRIPT_DIRECTORY .. "/../user_settings
 -- updates. New keys from future versions are merged in while preserving
 -- the user's values.
 local DEFAULTS_JSON = [==[
-{"note":"THIS JSON FILE WAS CREATED USING THE `DekModConfigMenu` MOD FOR PALWORLD! DO NOT MANUALLY EDIT THIS FILE UNLESS YOU KNOW WHAT YOU'RE DOING -- USE THE `DekModConfigMenu` MOD INSTEAD <3","meta":{"game":false,"vers":"1.2.2","auth":"T3R3NC3B","desc":"PalMiniMap (based on Paldar by T3R3NC3B) - a minimap radar that displays live pal positions and more. Updated for Palworld 1.0 By Jean Kassio.","link":{"nexus-mod-id":"879","curse-slug":"blueprint-code-mods/paldar-mini-map-radar","donate":""}},"General Settings":{"type":"header","desc":"Configure general settings."},"Enable mod":{"type":"boolean","desc":"Enable/disable the entire Paldar mod.","init":true,"live":true},"Minimap render resolution":{"type":"integer","desc":"Lower numbers for better performance, at the cost of quality.","flag":"","opts":{"min":32,"max":2048,"step":1},"init":512,"live":512},"Minimap opacity":{"type":"integer","desc":"Adjust transparency of the whole minimap.","flag":"","opts":{"min":1,"max":100,"step":1},"init":100,"live":100},"Minimap shape":{"type":"option","desc":"Change minimap shape to circular or square.","opts":["Circle","Square"],"init":"Square","live":"Square"},"Minimap image quality %":{"type":"integer","desc":"Resolution of the minimap terrain image, as a percent of the render resolution. Lower = big GPU saving, blurrier map. Applied live.","flag":"","opts":{"min":25,"max":100,"step":5},"init":60,"live":60},"Reduce captures when idle":{"type":"boolean","desc":"Skip re-rendering the minimap terrain while the view is not moving/turning/zooming. Big FPS saver when standing still or in base. No visual change.","init":true,"live":true},"Minimap autozoom while moving":{"type":"boolean","desc":"Auto zoom out minimap to different levels when walking, running & flying.","init":true,"live":true},"Minimap rotation lock":{"type":"boolean","desc":"Lock minimap rotation to north, player icon rotates instead.","init":false,"live":false},"Lock all icon rotations to north":{"type":"boolean","desc":"Locks all icons (excluding pals & NPCs) to be upright (north).","init":false,"live":false},"Autohide minimap while in base camps":{"type":"boolean","desc":"Hide minimap while in player base camps.","init":false,"live":false},"Hide collected items from minimap":{"type":"boolean","desc":"Remove chest, egg, note and lifmunk effigy icons from the minimap once you collect them (they disappear from the world).","init":true,"live":true},"Pal Locations":{"type":"header","desc":"Configure settings for displaying Pals."},"Show pal positions":{"type":"boolean","desc":"Show Pals around the player on the minimap.","init":true,"live":true},"Only show shiny pals":{"type":"boolean","desc":"Only shows shiny Pals around the player on the minimap.","init":false,"live":false},"Show pal icons while megazoomed out":{"type":"boolean","desc":"Keep Pal icons visible on the minimap while in megazoomed out mode.","init":false,"live":false},"NPCs and Points of Interest":{"type":"header","desc":"Customize display settings for NPCs and points of interest."},"Show NPC humans":{"type":"boolean","desc":"Show NPC humans on the minimap.","init":true,"live":true},"Show player base camps":{"type":"boolean","desc":"Show player base camps on the minimap.","init":true,"live":true},"Show player death locations":{"type":"boolean","desc":"Show player death locations on the minimap.","init":true,"live":true},"Show other players":{"type":"boolean","desc":"Show other players around the player on the minimap.","init":true,"live":true},"Show dungeons":{"type":"boolean","desc":"Show dungeon locations on the minimap.","init":true,"live":true},"Chests, Notes, and Other":{"type":"header","desc":"Customize display settings for chests, notes, and other entities."},"Show chests":{"type":"boolean","desc":"Show chests around the player on the minimap.","init":true,"live":true},"Show notes":{"type":"boolean","desc":"Show notes around the player on the minimap.","init":true,"live":true},"Show eggs":{"type":"boolean","desc":"Show eggs around the player on the minimap.","init":true,"live":true},"Show fast travel points":{"type":"boolean","desc":"Show fast travel points on the minimap.","init":true,"live":true},"Show skillfruit trees":{"type":"boolean","desc":"Show skillfruit trees around the player on the minimap.","init":true,"live":true},"Show lifmunk effigies":{"type":"boolean","desc":"Show Lifmunk Effigies around the player on the minimap.","init":false,"live":false},"Scan Frequencies":{"type":"header","desc":"Adjust scanning frequencies for various entities."},"Pal rescan rate":{"type":"integer","desc":"How often the radar will scan for new Pals around the player. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":5,"live":5},"Players rescan frequency":{"type":"integer","desc":"How often the radar will scan for NEW players (not refresh rate of current players). In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":12,"live":12},"Human NPC rescan frequency":{"type":"integer","desc":"How often the radar will scan for NPC humans around the player on the minimap. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":19,"live":19},"Chest rescan frequency":{"type":"integer","desc":"How often the radar will scan for chests around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Egg rescan frequency":{"type":"integer","desc":"How often the radar will scan for eggs around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Keybinds":{"type":"header","desc":"Customize keyboard shortcuts."},"Megazoom mode toggle keybind":{"type":"keybind","desc":"Set keybind for megazoom out mode toggle. Hold this key and press + or - to fine-zoom the minimap.","init":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Cycle default minimap positions keybind":{"type":"keybind","desc":"Set keybind for cycling between default minimap positions.","init":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Show/hide minimap toggle keybind":{"type":"keybind","desc":"Show/hide minimap toggle keyboard button.","init":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Customize minimap keybind":{"type":"keybind","desc":"Set keybind to enter customization mode - move with arrow keys, resize with + and - keys.","init":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Use new minimap edit mode size method":{"type":"boolean","desc":"ON: resize minimap in edit mode with mouse scroll wheel (BROKEN on Palworld 1.0). OFF (default): resize with + and - keys (also 9 and 0).","init":false,"live":false},"Minimap capture FPS cap":{"type":"integer","desc":"Max minimap terrain captures per second. Big FPS saver on high-refresh screens. 0 = uncapped (original behavior).","flag":"","opts":{"min":0,"max":120,"step":5},"init":30,"live":30},"Minimap capture LOD bias":{"type":"integer","desc":"Renders the minimap terrain with cheaper detail levels. 1 = original, higher = faster. Barely visible on the small map.","flag":"","opts":{"min":1,"max":8,"step":1},"init":3,"live":3}}
+{"note":"THIS JSON FILE WAS CREATED USING THE `DekModConfigMenu` MOD FOR PALWORLD! DO NOT MANUALLY EDIT THIS FILE UNLESS YOU KNOW WHAT YOU'RE DOING -- USE THE `DekModConfigMenu` MOD INSTEAD <3","meta":{"game":false,"vers":"1.2.3","auth":"T3R3NC3B","desc":"PalMiniMap (based on Paldar by T3R3NC3B) - a minimap radar that displays live pal positions and more. Updated for Palworld 1.0 By Jean Kassio.","link":{"nexus-mod-id":"879","curse-slug":"blueprint-code-mods/paldar-mini-map-radar","donate":""}},"General Settings":{"type":"header","desc":"Configure general settings."},"Enable mod":{"type":"boolean","desc":"Enable/disable the entire Paldar mod.","init":true,"live":true},"Minimap render resolution":{"type":"integer","desc":"Lower numbers for better performance, at the cost of quality.","flag":"","opts":{"min":32,"max":2048,"step":1},"init":512,"live":512},"Minimap opacity":{"type":"integer","desc":"Adjust transparency of the whole minimap.","flag":"","opts":{"min":1,"max":100,"step":1},"init":100,"live":100},"Minimap shape":{"type":"option","desc":"Change minimap shape to circular or square.","opts":["Circle","Square"],"init":"Square","live":"Square"},"Minimap autozoom while moving":{"type":"boolean","desc":"Auto zoom out minimap to different levels when walking, running & flying.","init":true,"live":true},"Minimap rotation lock":{"type":"boolean","desc":"Lock minimap rotation to north, player icon rotates instead.","init":false,"live":false},"Lock all icon rotations to north":{"type":"boolean","desc":"Locks all icons (excluding pals & NPCs) to be upright (north).","init":false,"live":false},"Autohide minimap while in base camps":{"type":"boolean","desc":"Hide minimap while in player base camps.","init":false,"live":false},"Hide collected items from minimap":{"type":"boolean","desc":"Remove chest, egg, note and lifmunk effigy icons from the minimap once you collect them (they disappear from the world).","init":true,"live":true},"Pal Locations":{"type":"header","desc":"Configure settings for displaying Pals."},"Show pal positions":{"type":"boolean","desc":"Show Pals around the player on the minimap.","init":true,"live":true},"Only show shiny pals":{"type":"boolean","desc":"Only shows shiny Pals around the player on the minimap.","init":false,"live":false},"Show pal icons while megazoomed out":{"type":"boolean","desc":"Keep Pal icons visible on the minimap while in megazoomed out mode.","init":false,"live":false},"NPCs and Points of Interest":{"type":"header","desc":"Customize display settings for NPCs and points of interest."},"Show NPC humans":{"type":"boolean","desc":"Show NPC humans on the minimap.","init":true,"live":true},"Show player base camps":{"type":"boolean","desc":"Show player base camps on the minimap.","init":true,"live":true},"Show player death locations":{"type":"boolean","desc":"Show player death locations on the minimap.","init":true,"live":true},"Show other players":{"type":"boolean","desc":"Show other players around the player on the minimap.","init":true,"live":true},"Show dungeons":{"type":"boolean","desc":"Show dungeon locations on the minimap.","init":true,"live":true},"Chests, Notes, and Other":{"type":"header","desc":"Customize display settings for chests, notes, and other entities."},"Show chests":{"type":"boolean","desc":"Show chests around the player on the minimap.","init":true,"live":true},"Show notes":{"type":"boolean","desc":"Show notes around the player on the minimap.","init":true,"live":true},"Show eggs":{"type":"boolean","desc":"Show eggs around the player on the minimap.","init":true,"live":true},"Show fast travel points":{"type":"boolean","desc":"Show fast travel points on the minimap.","init":true,"live":true},"Show skillfruit trees":{"type":"boolean","desc":"Show skillfruit trees around the player on the minimap.","init":true,"live":true},"Show lifmunk effigies":{"type":"boolean","desc":"Show Lifmunk Effigies around the player on the minimap.","init":false,"live":false},"Scan Frequencies":{"type":"header","desc":"Adjust scanning frequencies for various entities."},"Pal rescan rate":{"type":"integer","desc":"How often the radar will scan for new Pals around the player. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":5,"live":5},"Players rescan frequency":{"type":"integer","desc":"How often the radar will scan for NEW players (not refresh rate of current players). In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":12,"live":12},"Human NPC rescan frequency":{"type":"integer","desc":"How often the radar will scan for NPC humans around the player on the minimap. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":19,"live":19},"Chest rescan frequency":{"type":"integer","desc":"How often the radar will scan for chests around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Egg rescan frequency":{"type":"integer","desc":"How often the radar will scan for eggs around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Keybinds":{"type":"header","desc":"Customize keyboard shortcuts."},"Megazoom mode toggle keybind":{"type":"keybind","desc":"Set keybind for megazoom out mode toggle. Hold this key and press + or - to fine-zoom the minimap.","init":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Cycle default minimap positions keybind":{"type":"keybind","desc":"Set keybind for cycling between default minimap positions.","init":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Show/hide minimap toggle keybind":{"type":"keybind","desc":"Show/hide minimap toggle keyboard button.","init":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Customize minimap keybind":{"type":"keybind","desc":"Set keybind to enter customization mode - move with arrow keys, resize with + and - keys.","init":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Use new minimap edit mode size method":{"type":"boolean","desc":"ON: resize minimap in edit mode with mouse scroll wheel (BROKEN on Palworld 1.0). OFF (default): resize with + and - keys (also 9 and 0).","init":false,"live":false},"Minimap capture LOD bias":{"type":"integer","desc":"Renders the minimap terrain with cheaper detail levels. 1 = original, higher = faster. Barely visible on the small map.","flag":"","opts":{"min":1,"max":8,"step":1},"init":3,"live":3}}
 ]==]
 
 -- The stock blueprint reads these four keybind entries from the modconfig
@@ -96,12 +96,6 @@ local ZOOM_STEP = 500.0           -- zoom change per +/- key press
 local ZOOM_MIN, ZOOM_MAX = -7500.0, 15000.0
 local ICON_SOFT_CAP = 80          -- above this many pal icons, force a reset
 local CAMP_RESET_SECONDS = 120    -- periodic icon reset while inside a base camp (increased from 90s)
-local DEFAULT_CAPTURE_FPS = 30    -- fallback when the config entry is absent
-local DEFAULT_LOD_BIAS = 3
--- Capture throttling: limit minimap scene capture to 30 FPS max (instead of every frame)
--- This is the #1 fix for camera-movement stutter on high-refresh displays
-local CAPTURE_INTERVAL = 1.0 / 30.0  -- 33.3ms = 30 FPS cap
-local lastCaptureTime = 0.0
 -- Anti-churn tuning: earlier builds reset the icon arrays on every janitor
 -- pass whenever the counts disagreed. On UE4SS builds where TArray:Empty()
 -- is a no-op (some users) the counts never actually change, so the reset
@@ -230,10 +224,10 @@ local function pokeModActor()
             -- LoadSettingsFromJson runs for every menu edit. Let the visual
             -- cache decide whether opacity/shape really changed; forcing this
             -- path rebuilds the render-target binding for unrelated options.
-            applyMinimapVisualSettings(actor, false)
+            pcall(applyMinimapVisualSettings, actor, false)
         end
         if applyEditModeLocalization then
-            applyEditModeLocalization(actor, false)
+            pcall(applyEditModeLocalization, actor, false)
         end
     end
 end
@@ -255,50 +249,6 @@ local function applyRenderQuality(res)
             local krl = StaticFindObject("/Script/Engine.Default__KismetRenderingLibrary")
             krl:ResizeRenderTarget2D(rt, res, res)
             log(string.format("minimap render target resized to %dx%d", res, res))
-        end
-    end)
-end
-
--- Cheaper minimap capture: the stock blueprint renders the whole scene
--- top-down into the minimap EVERY frame (a second full render each frame) --
--- the main source of the long-standing stutter when moving the camera. We
--- can't remove that render (that path blanked the map before), but we can make
--- it cheaper by biasing its mesh LODs: distant/near meshes use lower-detail
--- LODs in the capture only. Barely visible on the small map, no blank risk.
--- Applied once per world (property write on the capture component, guarded).
-local CAPTURE_LOD_FACTOR = 2.0   -- 1.0 = stock; higher = cheaper capture
-local captureLODAppliedFor = nil
-
-local function applyCaptureLOD(actor)
-    if actor == nil or captureLODAppliedFor == actor then return end
-    if not isAlive(actor) then return end
-    pcall(function()
-        local cap = actor.sceneCaptureCompREF
-        if cap and cap:IsValid() then
-            cap.LODDistanceFactor = CAPTURE_LOD_FACTOR
-            captureLODAppliedFor = actor
-            log(string.format("minimap capture LOD factor set to %.1f (cheaper per-frame render)",
-                              CAPTURE_LOD_FACTOR))
-        end
-    end)
-end
-
--- Throttle the scene capture to CAPTURE_INTERVAL (30 FPS max) instead of every frame.
--- This is called from the world tick loop (1s interval) and applies the setting once.
-local function applyCaptureThrottle(actor)
-    if actor == nil then return end
-    if not isAlive(actor) then return end
-    pcall(function()
-        local cap = actor.sceneCaptureCompREF
-        if cap and cap:IsValid() then
-            -- Disable every-frame capture; we'll let the blueprint's native capture run
-            -- but the LOD factor above makes it cheaper. The blueprint captures every frame
-            -- by default (bCaptureEveryFrame = true), so we can't easily throttle it from Lua
-            -- without risking a blank map. The LOD factor is the safe optimization.
-            -- Note: If you want to implement manual capture throttling, you'd need to:
-            -- 1. Set cap.bCaptureEveryFrame = false
-            -- 2. Use a LoopAsync at 30 FPS to call cap:CaptureScene()
-            -- But this caused blank map issues in earlier versions, so we stick with LOD bias.
         end
     end)
 end
@@ -347,12 +297,58 @@ local function cfgNumber(key, default)
     return default
 end
 
+-- Cheaper minimap capture: the stock blueprint renders the whole scene
+-- top-down into the minimap EVERY frame (a second full render each frame) --
+-- the main source of the long-standing stutter when moving the camera. We
+-- can't remove that render (that path blanked the map before), but we can make
+-- it cheaper by biasing its mesh LODs: distant/near meshes use lower-detail
+-- LODs in the capture only. Barely visible on the small map, no blank risk.
+-- The factor comes from the "Minimap capture LOD bias" config entry (plain
+-- property write, self-gated: reapplied only when the actor or value changes).
+local captureLODAppliedFor = nil
+local captureLODAppliedValue = nil
+
+local function applyCaptureLOD(actor)
+    if actor == nil or not isAlive(actor) then return end
+    local factor = cfgNumber("Minimap capture LOD bias", 2)
+    if type(factor) ~= "number" then factor = 2 end
+    if factor < 1 then factor = 1 elseif factor > 8 then factor = 8 end
+    factor = factor + 0.0
+    if captureLODAppliedFor == actor and captureLODAppliedValue == factor then return end
+    pcall(function()
+        local cap = actor.sceneCaptureCompREF
+        if cap and cap:IsValid() then
+            cap.LODDistanceFactor = factor
+            captureLODAppliedFor = actor
+            captureLODAppliedValue = factor
+            log(string.format("minimap capture LOD factor set to %.1f (cheaper per-frame render)",
+                              factor))
+        end
+    end)
+end
+
 local function writeFileTo(path, text)
     local f = io.open(path, "w")
     if not f then return false end
-    f:write(text)
+    -- write can raise (disk full / handle yanked); never let that propagate
+    -- into script load or a menu commit
+    local ok = pcall(function() f:write(text) end)
     f:close()
-    return true
+    return ok
+end
+
+-- The blueprint reads CONFIG_PATH on its own schedule; an in-place write can
+-- be observed half-written ("READ SETTINGS FROM JSON FAILED"). Write to a
+-- sibling temp file and swap it in so readers only ever see complete JSON.
+local function writeFileAtomic(path, text)
+    local tmp = path .. ".tmp"
+    if not writeFileTo(tmp, text) then
+        return writeFileTo(path, text)   -- temp not writable: direct write
+    end
+    os.remove(path)                      -- Windows rename won't overwrite
+    if os.rename(tmp, path) then return true end
+    os.remove(tmp)
+    return writeFileTo(path, text)
 end
 
 local function writeConfig(cfg)
@@ -361,7 +357,7 @@ local function writeConfig(cfg)
         log("ERROR: failed to encode JSON: " .. tostring(text))
         return false
     end
-    if not writeFileTo(CONFIG_PATH, text) then
+    if not writeFileAtomic(CONFIG_PATH, text) then
         log("ERROR: could not write " .. CONFIG_PATH)
         return false
     end
@@ -381,6 +377,15 @@ local function readJsonFile(path)
     if ok and type(cfg) == "table" then return cfg end
     return nil
 end
+
+-- Options left over from removed experiments (manual capture / capture
+-- throttling). Nothing reads them anymore; purge them from existing config
+-- files so config tools stop showing dead switches.
+local REMOVED_KEYS = {
+    "Minimap image quality %",
+    "Reduce captures when idle",
+    "Minimap capture FPS cap",
+}
 
 -- Runs once at startup, before any world (and the mod's blueprint) reads
 -- the config file: creates it from defaults on first run, restores it from
@@ -413,6 +418,13 @@ local function ensureConfig()
                 cur[k] = v
                 changed = true
                 log("new option added by update: '" .. tostring(k) .. "'")
+            end
+        end
+        for _, k in ipairs(REMOVED_KEYS) do
+            if cur[k] ~= nil then
+                cur[k] = nil
+                changed = true
+                log("obsolete option removed: '" .. k .. "'")
             end
         end
         if migrateKeybinds(cur) then
@@ -457,7 +469,8 @@ applyMinimapVisualSettings = function(actor, force)
     local opacity = opacityValue / 100.0
     local shape = cfg["Minimap shape"]
     local square = type(shape) == "table" and shape.live == "Square"
-    local widget = actor.mapWidget
+    local widget = nil
+    pcall(function() widget = actor.mapWidget end)
     local actorKey = objectKey(actor)
     local widgetKey = objectKey(widget)
     local actorChanged = actorKey ~= visualActorKey or widgetKey ~= visualWidgetKey
@@ -517,80 +530,79 @@ local janitorPassCount = 0
 local lastCountReset = 0.0        -- last desync/overflow reset (cooldown gate)
 local desyncStreak = 0           -- consecutive passes seen desynced
 local countResetsDisabled = false -- set once we learn Empty() can't clear arrays
+local worldName = ""             -- current world; updated by the world tick loop.
+                                 -- MUST be declared here (above janitorPass /
+                                 -- sweepCollectedIcons / hideCollectedObtainables) so
+                                 -- their "NON_GAME_WORLDS[worldName]" guard reads this
+                                 -- upvalue and not a nil global.
+
+-- Destroying a component while the blueprint's arrays still reference it is
+-- the v1.2.2 use-after-free, so the reset runs in the only safe order:
+-- 1) collect the live components into a Lua table, 2) Empty() the tracking
+-- arrays, 3) destroy the collected components ONLY if the arrays really
+-- cleared (we still hold references; the blueprint no longer does). When
+-- Empty() is unsupported nothing is destroyed at all — a dangling entry left
+-- in the array would crash natively on the next ForEach.
+local function collectIconComponents(actor)
+    local comps = {}
+    pcall(function()
+        actor.palIconMapSMs:ForEach(function(_, elem)
+            pcall(function()
+                local comp = elem:get()
+                if comp and comp:IsValid() then
+                    comps[#comps + 1] = comp
+                end
+            end)
+        end)
+    end)
+    return comps
+end
 
 local function resetPalIcons(actor, reason)
-    local n = destroyIconComponents(actor)
+    local comps = collectIconComponents(actor)
     local cleared = pcall(function()
         actor.palIconMapSMs:Empty()
         actor.trackedPals:Empty()
         actor.monsterMapIDs:Empty()
     end)
-    if not cleared and not emptyUnsupportedWarned then
-        emptyUnsupportedWarned = true
-        log("note: TArray:Empty() unavailable; icons destroyed but arrays kept " ..
-            "(the mod's own cleanup loop will prune them)")
+    if not cleared then
+        if not emptyUnsupportedWarned then
+            emptyUnsupportedWarned = true
+            log("note: TArray:Empty() unavailable; icon resets disabled " ..
+                "(destroying tracked icons would crash; orphan hiding still runs)")
+        end
+        return false
     end
-    log(string.format("pal icon reset (%s): %d components destroyed, arrays cleared=%s",
-                      reason, n, tostring(cleared)))
-    return cleared
-end
-
--- These capture-tracking locals are kept only because the world-change
--- handler still resets them; the capture logic that used them is disabled.
-local lastCaptureActive = nil
-local captureGen = 0
-local captureAppliedFor = nil
-local rtSizedFor = nil
-local startCaptureLoop
-local lastCapX, lastCapY, lastCapZ = nil, nil, nil
-local lastCapYaw = nil
-local lastCapOrtho = nil
-local lastCapTime = 0.0
-
--- Terrain capture is left ENTIRELY to the stock blueprint, which captures
--- every frame natively (bCaptureEveryFrame defaults to true). Earlier
--- versions tried to throttle the capture, drive it manually, resize the
--- render target and toggle it with visibility — that broke the minimap
--- image (blank map), so all of it is disabled. These stay as no-ops so the
--- existing call sites keep working without further edits.
-local function applyRenderTargetQuality(actor) end
-local function applyCaptureSettings(actor) end
-local function mirrorCaptureToVisibility(wname) end
-
-local function doDestroy(elem, actor)
-    local comp = elem:get()
-    if comp and comp:IsValid() then
-        comp:K2_DestroyComponent(actor)
-    end
-end
-
-local function destroyIconComponents(actor)
     local destroyed = 0
-    local MAX_DESTROY_PER_PASS = 20
-    pcall(function()
-        actor.palIconMapSMs:ForEach(function(_, elem)
-            if destroyed >= MAX_DESTROY_PER_PASS then return end
-            if pcall(doDestroy, elem, actor) then
-                destroyed = destroyed + 1
-            end
+    for _, comp in ipairs(comps) do
+        local ok = pcall(function()
+            if comp:IsValid() then comp:K2_DestroyComponent(actor) end
         end)
-    end)
-    return destroyed
+        if ok then destroyed = destroyed + 1 end
+    end
+    log(string.format("pal icon reset (%s): arrays cleared, %d/%d components destroyed",
+                      reason, destroyed, #comps))
+    return true
 end
 
--- Same rule as the collectible sweep: hide orphaned pal icons instead of
--- destroying them. Destroying leaves a dangling entry in palIconMapSMs that the
--- next pass would destroy again (use-after-free). The periodic resetPalIcons
--- below still frees them for real, because it clears the arrays as well.
-local function checkOrphan(elem, actor)
+-- An orphaned icon (attach parent gone) means its world actor despawned: the
+-- pal left/died or the collectible was picked up, so the icon must leave the
+-- minimap. Hide it, do NOT destroy it: K2_DestroyComponent leaves a dangling
+-- entry inside the blueprint's array, and IsValid() keeps returning true until
+-- GC runs -- destroying it again on the next pass was the v1.2.2
+-- use-after-free hard crash. SetVisibility is idempotent and keeps the arrays
+-- consistent; resetPalIcons above still frees pal icons for real because it
+-- clears the arrays first. Returns true when it hid something.
+local function hideIfOrphaned(elem)
     local comp = elem:get()
-    if not (comp and comp:IsValid()) then return end
+    if not (comp and comp:IsValid()) then return false end
     local parent = comp:GetAttachParent()
-    if parent ~= nil and parent:IsValid() then return end
+    if parent ~= nil and parent:IsValid() then return false end  -- still in world
     local visible = nil
     pcall(function() visible = comp:IsVisible() end)
-    if visible == false then return end   -- already hidden
+    if visible == false then return false end   -- already hidden: nothing to do
     comp:SetVisibility(false, true)
+    return true
 end
 
 -- Janitor Pass Otimizado
@@ -644,7 +656,7 @@ local function janitorPass()
     if n3 > 0 and (janitorPassCount % 3) == 0 then
         pcall(function()
             actor.palIconMapSMs:ForEach(function(_, elem)
-                pcall(checkOrphan, elem, actor)
+                pcall(hideIfOrphaned, elem)
             end)
         end)
     end
@@ -666,8 +678,6 @@ end
 local COLLECTIBLE_ICON_ARRAYS = {
     "eggicons", "EffigyIcons", "notesIcons", "mapIcon_CHESTS",
 }
-
-
 
 -- ---------------------------------------------------------------
 -- Collected Lifmunk Effigies and notes: unlike chests and eggs, a
@@ -708,28 +718,6 @@ local PERSISTENT_COLLECTIBLES = {
     { iconArray = "notesIcons",  classHint = "Note",  label = "notes" },
 }
 
--- An orphaned icon means its world actor is gone (the item was collected or
--- despawned), so the icon must leave the minimap.
---
--- IMPORTANT: hide it, do NOT destroy it. K2_DestroyComponent leaves the now
--- dangling entry inside the blueprint's array, and IsValid() keeps returning
--- true until GC runs -- so the next pass (every ~3 s) found the same component
--- and destroyed it AGAIN, over and over. That repeated destroy is a
--- use-after-free and hard-crashed the game after a few minutes of play (the
--- log showed the same "removed N icon(s)" line repeating forever).
--- SetVisibility is idempotent and keeps the blueprint's arrays consistent.
-local function checkCollectedOrphan(elem, actor)
-    local comp = elem:get()
-    if not (comp and comp:IsValid()) then return false end
-    local parent = comp:GetAttachParent()
-    if parent ~= nil and parent:IsValid() then return false end  -- still in world
-    local visible = nil
-    pcall(function() visible = comp:IsVisible() end)
-    if visible == false then return false end   -- already hidden: nothing to do
-    comp:SetVisibility(false, true)
-    return true
-end
-
 local function sweepCollectedIcons()
     if worldName == "" or NON_GAME_WORLDS[worldName] then return end
     if not cfgBool("Hide collected items from minimap", true) then return end
@@ -742,12 +730,12 @@ local function sweepCollectedIcons()
             local arr = actor[arrName]
             if not arr then return end
             arr:ForEach(function(_, elem)
-                local ok, didRemove = pcall(checkCollectedOrphan, elem, actor)
-                if ok and didRemove then removed = removed + 1 end
+                local ok, didHide = pcall(hideIfOrphaned, elem)
+                if ok and didHide then removed = removed + 1 end
             end)
         end)
         if removed > 0 then
-            log(string.format("removed %d collected-item icon(s) from '%s'", removed, arrName))
+            log(string.format("hid %d collected-item icon(s) from '%s'", removed, arrName))
         end
     end
 end
@@ -971,7 +959,8 @@ local editTextLanguage = nil
 
 applyEditModeLocalization = function(actor, force)
     if actor == nil or not isAlive(actor) then return end
-    local widget = actor.mapWidget
+    local widget = nil
+    pcall(function() widget = actor.mapWidget end)
     if widget == nil or not isAlive(widget) then return end
     local language = detectMenuLanguage()
     local widgetKey = objectKey(widget)
@@ -1041,10 +1030,12 @@ local MENU_LAYOUT = {
 }
 
 local menu = nil          -- current UserWidget
-local controls = {}       -- {key=, type=, widget=, last=}
-local worldName = ""      -- updated by the 1s world loop
+local controls = {}       -- {key=, type=, widget=, last=, committed=}
+-- worldName is declared earlier (near the janitor state) so the cleanup passes
+-- above can see it; do NOT redeclare it here or it would shadow that upvalue.
 local menuWorld = ""      -- world the menu was created in
 local lastToggle = 0.0
+local flushPendingChanges -- defined with the change-collection code below
 
 local function cls(path) return StaticFindObject(path) end
 
@@ -1227,7 +1218,8 @@ local function buildMenu(pc)
                     table.insert(controls, { key = item.key, type = "quality",
                                              widget = sld, valueWidget = valTxt,
                                              presets = presets, min = 0, max = #presets - 1,
-                                             last = idx, language = language })
+                                             last = idx, committed = idx,
+                                             language = language })
                 elseif entry.type == "boolean" or entry.type == "option" then
                     local isOn
                     if entry.type == "option" then isOn = (entry.live == "Square")
@@ -1240,7 +1232,8 @@ local function buildMenu(pc)
                     alignSlot(row:AddChild(cb), 3, 2)
                     padSlot(scroll:AddChild(row), 6, 4, 6, 4)
                     table.insert(controls, { key = item.key, type = entry.type,
-                                             widget = cb, last = (isOn == true) })
+                                             widget = cb, last = (isOn == true),
+                                             committed = (isOn == true) })
                 elseif entry.type == "integer" then
                     local mn = (entry.opts and entry.opts.min) or 0
                     local mx = (entry.opts and entry.opts.max) or 9999
@@ -1272,7 +1265,8 @@ local function buildMenu(pc)
                     padSlot(scroll:AddChild(row), 6, 5, 6, 5)
                     table.insert(controls, { key = item.key, type = "integer",
                                              widget = sld, valueWidget = valTxt,
-                                             min = mn, max = mx, last = roundInt(val) })
+                                             min = mn, max = mx,
+                                             last = roundInt(val), committed = roundInt(val) })
                 elseif entry.type == "keybind" then
                     local k = (type(entry.live) == "table" and entry.live.key) or "?"
                     padSlot(scroll:AddChild(makeText(tree, "[ " .. tostring(k) .. " ]   " .. label,
@@ -1295,6 +1289,9 @@ local function openMenu()
     if wname == nil then return end
     -- refuse to open during world transitions (cached name must agree)
     if wname ~= worldName then return end
+    -- drop the config cache so edits made outside this menu (another tool
+    -- writing the same file) are picked up instead of clobbered on save
+    configCache = nil
 
     local okpc, pc = pcall(UEHelpers.GetPlayerController)
     if not okpc or not isAlive(pc) then
@@ -1323,6 +1320,11 @@ end
 
 local function closeMenu()
     if not menuOpen then return end
+    -- a slider may still be inside its commit-delay window; save it now so
+    -- the change is not lost with the widget
+    if flushPendingChanges then
+        runGuarded("flushPendingChanges", flushPendingChanges)
+    end
     local wasWorld = menuWorld
     if menuUsable() then
         pcall(function() menu:RemoveFromParent() end)
@@ -1355,48 +1357,18 @@ end
 -- ---------------------------------------------------------------
 -- Applying changes (polled ~4x/s while the menu is open)
 -- ---------------------------------------------------------------
-local function collectChanges()
-    if not menuOpen then return end
-    if not menuUsable() then
-        dropMenuRefs()
-        return
-    end
-    local changed = {}
-    for _, c in ipairs(controls) do
-        local okv, cur = pcall(function()
-            if c.type == "integer" or c.type == "quality" then
-                local v = roundInt(c.widget:GetValue())
-                if c.min and v < c.min then v = c.min end
-                if c.max and v > c.max then v = c.max end
-                return v
-            else
-                return c.widget:IsChecked()
-            end
-        end)
-        if okv and cur ~= nil and cur ~= c.last then
-            c.last = cur
-            if c.valueWidget then
-                -- keep the readout next to the slider in sync while dragging
-                local txt
-                if c.type == "quality" and c.presets then
-                    local p = c.presets[cur + 1]
-                    txt = p and menuText(c.language or "en", p.name) or nil
-                elseif c.type == "integer" then
-                    txt = tostring(cur)
-                end
-                if txt then pcall(function() c.valueWidget:SetText(FText(txt)) end) end
-            end
-            table.insert(changed, { c = c, value = cur })
-        end
-    end
-    if #changed == 0 then return end
+local SLIDER_COMMIT_DELAY = 0.4   -- seconds a slider must rest before saving
 
+-- Persist a batch of control values: update the config, write it once, then
+-- poke the actor so the blueprint reloads. `entries` is { {c=control, value=} }.
+local function applyControlValues(entries)
+    if #entries == 0 then return end
     local cfg = readConfig()
     if not cfg then return end
     local palIconResetNeeded = false
-    local captureChanged = false
     local qualityRes = nil
-    for _, ch in ipairs(changed) do
+    for _, ch in ipairs(entries) do
+        ch.c.committed = ch.value
         local entry = cfg[ch.c.key]
         if type(entry) == "table" then
             if ch.c.type == "boolean" then
@@ -1413,12 +1385,6 @@ local function collectChanges()
             if ch.c.key == "Show pal positions" then
                 palIconResetNeeded = true
             end
-            if ch.c.key == "Minimap capture FPS cap"
-               or ch.c.key == "Minimap capture LOD bias"
-               or ch.c.key == "Minimap image quality %"
-               or ch.c.key == "Reduce captures when idle" then
-                captureChanged = true
-            end
         end
     end
     if writeConfig(cfg) then
@@ -1429,21 +1395,92 @@ local function collectChanges()
             local actor = getModActor()
             if actor then resetPalIcons(actor, "Show pal positions toggled") end
         end
-        if captureChanged then
-            local actor = getModActor()
-            if actor then applyCaptureSettings(actor) end
-        end
         if qualityRes then
             applyRenderQuality(qualityRes)  -- resize the render target live
         end
     end
 end
 
+-- Menu is closing while a slider is still inside its commit-delay window:
+-- save the last polled values so the change is not lost with the widget.
+flushPendingChanges = function()
+    local pending = {}
+    for _, c in ipairs(controls) do
+        if c.last ~= nil and c.last ~= c.committed then
+            pending[#pending + 1] = { c = c, value = c.last }
+        end
+    end
+    applyControlValues(pending)
+end
+
+local function collectChanges()
+    if not menuOpen then return end
+    if not menuUsable() then
+        dropMenuRefs()
+        return
+    end
+    local now = os.clock()
+    local toCommit = {}
+    for _, c in ipairs(controls) do
+        local okv, cur = pcall(function()
+            if c.type == "integer" or c.type == "quality" then
+                local v = roundInt(c.widget:GetValue())
+                if c.min and v < c.min then v = c.min end
+                if c.max and v > c.max then v = c.max end
+                return v
+            else
+                return c.widget:IsChecked()
+            end
+        end)
+        if okv and cur ~= nil then
+            if cur ~= c.last then
+                c.last = cur
+                c.lastChangedAt = now
+                if c.valueWidget then
+                    -- keep the readout next to the slider in sync while dragging
+                    local txt
+                    if c.type == "quality" and c.presets then
+                        local p = c.presets[cur + 1]
+                        txt = p and menuText(c.language or "en", p.name) or nil
+                    elseif c.type == "integer" then
+                        txt = tostring(cur)
+                    end
+                    if txt then pcall(function() c.valueWidget:SetText(FText(txt)) end) end
+                end
+            end
+            -- Saving on every 250 ms poll while a slider was being dragged meant
+            -- a config rewrite + backup write + LoadSettingsFromJson (+ render
+            -- target resize) four times a second -- a visible hitch. Sliders now
+            -- commit only after resting; checkboxes commit immediately.
+            local isSlider = (c.type == "integer" or c.type == "quality")
+            if cur ~= c.committed
+               and (not isSlider or (now - (c.lastChangedAt or 0)) >= SLIDER_COMMIT_DELAY) then
+                toCommit[#toCommit + 1] = { c = c, value = cur }
+            end
+        end
+    end
+    applyControlValues(toCommit)
+end
+
 -- ---------------------------------------------------------------
 -- Loops and registration
 -- ---------------------------------------------------------------
 
--- Loops and registration
+-- World transitions: the 3 s world tick can lag behind a level change, leaving
+-- a short window where a queued sweep touches a dying actor (a native access
+-- violation pcall cannot catch). UEngine::LoadMap fires right at the
+-- transition, so drop every cached reference immediately and re-arm the
+-- BeginPlay grace window. Best-effort: on UE4SS builds without this hook the
+-- world tick below still handles it (just later).
+pcall(function()
+    RegisterLoadMapPreHook(function()
+        actorGraceUntil = os.clock() + ACTOR_TOUCH_GRACE
+        cachedActor = nil
+        worldName = ""
+        dropMenuRefs()
+    end)
+end)
+
 RegisterKeyBind(MENU_KEY, function()
     ExecuteInGameThread(function() pcall(toggleMenu) end)
 end)
@@ -1467,16 +1504,24 @@ LoopAsync(30000, function()
     return false
 end)
 
--- Remove ícones despawnados (14s)
-LoopAsync(3150, function()
+-- Remove ícones despawnados.
+-- CADENCE MATTERS FOR STABILITY: these two loops walk the blueprint's icon
+-- TArrays through UE4SS reflection. If the blueprint destroyed an icon and left
+-- a stale entry behind, `elem:get()` dereferences it *before* we can call
+-- IsValid() -- that is a native access violation which pcall CANNOT catch (the
+-- crash dump showed exactly that: GameThread, all UE4SS frames, reading
+-- 0xffffffffffffffff). Running this every ~3 s multiplied the exposure, so it is
+-- back to a slow cadence: an icon lingering a few extra seconds is a far better
+-- trade than a crash. The two loops are staggered so they never land together.
+LoopAsync(20000, function()
     pcall(ExecuteInGameThread, function()
         runGuarded("sweepCollectedIcons", sweepCollectedIcons)
     end)
     return false
 end)
 
--- Esconde ícones persistentes já coletados (17s) - Desacoplado do loop acima
-LoopAsync(3180, function()
+-- Esconde ícones persistentes já coletados - Desacoplado do loop acima
+LoopAsync(23000, function()
     pcall(ExecuteInGameThread, function()
         runGuarded("hideCollectedObtainables", hideCollectedObtainables)
     end)
@@ -1504,17 +1549,12 @@ LoopAsync(3000, function()
                 actorGraceUntil = os.clock() + ACTOR_TOUCH_GRACE
                 lastActorScan = 0.0          -- allow an immediate re-scan in the new world
                 desyncStreak = 0             -- fresh actor -> fresh desync tracking
-                lastCaptureActive = nil
-                captureAppliedFor = nil
                 captureLODAppliedFor = nil   -- re-apply the capture LOD in the new world
-                rtSizedFor = nil
+                captureLODAppliedValue = nil
                 visualActorKey, visualWidgetKey = nil, nil
                 visualActorOpacity, visualActorSquare = nil, nil
                 visualOpacity, visualSquare = nil, nil
                 editTextWidgetKey, editTextLanguage = nil, nil
-                lastCapX, lastCapY, lastCapZ, lastCapYaw, lastCapOrtho = nil, nil, nil, nil, nil
-                lastCapTime = 0.0
-                captureGen = captureGen + 1  -- stop any orphaned capture loop
                 dropMenuRefs()
             elseif menuOpen and not menuUsable() then
                 -- same-name world swap (e.g. logout/login): widget is gone
@@ -1527,11 +1567,10 @@ LoopAsync(3000, function()
             if actor then
                 pcall(function() applyMinimapVisualSettings(actor, false) end)
                 pcall(function() applyEditModeLocalization(actor, false) end)
-                -- once the minimap actor exists in a real world, make its every-frame
-                -- capture cheaper -- a one-time property write that helps stutter
-                if captureLODAppliedFor ~= actor then
-                    applyCaptureLOD(actor)
-                end
+                -- once the minimap actor exists in a real world, make its
+                -- every-frame capture cheaper (self-gated: reapplies only when
+                -- the actor or the configured LOD bias changes)
+                applyCaptureLOD(actor)
             end
             -- Terrain capture is left to the stock blueprint. The config menu is
             -- opened/closed only with F5 (no auto-open on the title screen).
