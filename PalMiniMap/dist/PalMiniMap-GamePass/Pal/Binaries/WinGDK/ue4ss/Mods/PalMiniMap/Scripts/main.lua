@@ -686,6 +686,15 @@ local COLLECTIBLE_ICON_ARRAYS = {
 -- sets bPickedInClient on the actor). The orphan sweep above can
 -- therefore never catch them, so their icons are hidden directly from
 -- that flag. Rides the same "Hide collected items from minimap" toggle.
+--
+-- RELOG: bPickedInClient is only true in the session that picked the
+-- item -- after quitting and reloading it reads false again, yet the
+-- game itself keeps the collected actor invisible in world (that is why
+-- the effigy no longer shows there). So the hidden-in-world state of
+-- the actor is the persistent truth, read every pass straight from game
+-- state: actor bHidden, or every one of its own static meshes hidden.
+-- An uncollected item always has a visible mesh (you can see it in the
+-- world), so this cannot hide a live icon. No files, no history.
 -- ---------------------------------------------------------------
 
 -- TArray elements can arrive wrapped on some UE4SS builds
@@ -717,6 +726,35 @@ local PERSISTENT_COLLECTIBLES = {
     { iconArray = "EffigyIcons", classHint = "Relic", label = "effigies" },
     { iconArray = "notesIcons",  classHint = "Note",  label = "notes" },
 }
+
+local smcClass = nil   -- cached /Script/Engine.StaticMeshComponent class
+
+-- True when the game itself is hiding this actor in the world -- the
+-- persistent "already collected" signal that survives relogs. Two forms,
+-- depending on how the game hid it: the whole actor (SetActorHiddenInGame ->
+-- bHidden) or its own static mesh components (SetVisibility per component).
+-- Every read is guarded; any failure just reports "not hidden".
+local function actorHiddenInWorld(owner)
+    local hidden = nil
+    pcall(function() hidden = asBool(owner.bHidden) end)
+    if hidden == true then return true end
+    local result = false
+    pcall(function()
+        if smcClass == nil or not smcClass:IsValid() then
+            smcClass = StaticFindObject("/Script/Engine.StaticMeshComponent")
+        end
+        if smcClass == nil then return end
+        local comps = owner:K2_GetComponentsByClass(smcClass)
+        local n = comps and #comps or 0
+        if n == 0 then return end   -- no meshes to judge by: assume visible
+        for i = 1, n do
+            local c = elemObject(comps[i])
+            if c and c:IsValid() and c:IsVisible() then return end
+        end
+        result = true   -- has meshes and every one of them is hidden
+    end)
+    return result
+end
 
 local function sweepCollectedIcons()
     if worldName == "" or NON_GAME_WORLDS[worldName] then return end
@@ -761,7 +799,10 @@ local function processCollectible(comp, enabled, classHint)
             -- GetName() é brutalmente mais rápido e leve que GetFullName()
             local name = owner:GetClass():GetName()
             if string.find(name, classHint, 1, true) then
-                if asBool(owner.bPickedInClient) == true then
+                -- picked this session (flag), or picked in a previous session
+                -- (the game keeps the actor hidden in world after a relog)
+                if asBool(owner.bPickedInClient) == true
+                   or actorHiddenInWorld(owner) then
                     comp:SetVisibility(false, true)
                     return 1, 0
                 end
