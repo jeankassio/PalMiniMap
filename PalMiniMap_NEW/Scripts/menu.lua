@@ -118,11 +118,6 @@ local LAYOUT = {
 
     { header = "Troubleshooting" },
     { key = "logGameUiWidgets",  label = "Log game UI widget names",  kind = "bool" },
-
-    { header = "Map orientation (only if the map looks wrong)" },
-    { key = "axis.swapXY",       label = "Swap X / Y",               kind = "bool" },
-    { key = "axis.flipH",        label = "Mirror horizontally",      kind = "bool" },
-    { key = "axis.flipV",        label = "Mirror vertically",        kind = "bool" },
 }
 
 -- ---------------------------------------------------------------
@@ -150,9 +145,19 @@ end
 -- ---------------------------------------------------------------
 -- small UMG helpers
 -- ---------------------------------------------------------------
+-- Memoised, like render.lua's: building the window constructs ~200 widgets
+-- and each one repeated the same class-path lookup.
+local classCache = {}
+
 local function cls(path)
+    local hit = classCache[path]
+    if hit ~= nil and guard.alive(hit) then return hit end
     local o = guard.get(StaticFindObject, path)
-    if o and guard.alive(o) then return o end
+    if o and guard.alive(o) then
+        classCache[path] = o
+        return o
+    end
+    classCache[path] = nil
     return nil
 end
 
@@ -210,6 +215,20 @@ end
 -- EMouseLockMode: 0 DoNotLock. UIOnly is the right mode for a modal
 -- window; GameAndUI is kept as a fallback for builds without it.
 -- ---------------------------------------------------------------
+-- Hoisted, because applyInputMode runs four times a second for as long as
+-- the window is open: the closure-per-call style allocated garbage on the
+-- game thread the whole time the settings were being edited. Same rule as
+-- render.lua's setters - pass the arguments, do not close over them.
+local function rawUIOnly(wbl, pc, widget)
+    wbl:SetInputMode_UIOnlyEx(pc, widget, 0)
+    return true
+end
+local function rawGameAndUI(wbl, pc, widget)
+    wbl:SetInputMode_GameAndUIEx(pc, widget, 0, false)
+end
+local function rawGameOnly(wbl, pc) wbl:SetInputMode_GameOnly(pc) end
+local function rawShowCursor(pc, on) pc.bShowMouseCursor = on end
+
 local function applyInputMode(pc, widget)
     if pc == nil or not guard.alive(pc) then return end
     -- NEVER on the splash/login/title screens. Those PlayerControllers are
@@ -222,15 +241,11 @@ local function applyInputMode(pc, widget)
     if not inGameWorld() then return end
     local wbl = cls("/Script/UMG.Default__WidgetBlueprintLibrary")
     if wbl ~= nil and widget ~= nil then
-        local ok = guard.get(function()
-            wbl:SetInputMode_UIOnlyEx(pc, widget, 0)
-            return true
-        end)
-        if ok == nil then
-            guard.get(function() wbl:SetInputMode_GameAndUIEx(pc, widget, 0, false) end)
+        if guard.get(rawUIOnly, wbl, pc, widget) == nil then
+            guard.get(rawGameAndUI, wbl, pc, widget)
         end
     end
-    guard.get(function() pc.bShowMouseCursor = true end)
+    guard.get(rawShowCursor, pc, true)
 end
 
 local function releaseInputMode(pc)
@@ -238,9 +253,9 @@ local function releaseInputMode(pc)
     if not inGameWorld() then return end
     local wbl = cls("/Script/UMG.Default__WidgetBlueprintLibrary")
     if wbl ~= nil then
-        guard.get(function() wbl:SetInputMode_GameOnly(pc) end)
+        guard.get(rawGameOnly, wbl, pc)
     end
-    guard.get(function() pc.bShowMouseCursor = false end)
+    guard.get(rawShowCursor, pc, false)
 end
 
 -- ---------------------------------------------------------------
@@ -421,7 +436,7 @@ end
 
 function M.close()
     if not S.open then return end
-    if M.onCommit then guard.try("menu flush", function() M.flush() end) end
+    if M.onCommit then guard.try("menu flush", M.flush) end
     if S.widget ~= nil and guard.alive(S.widget) then
         guard.get(function() S.widget:RemoveFromParent() end)
     end
@@ -486,29 +501,67 @@ local function toStored(c, shown)
     return shown
 end
 
-local function commit(cfg, pending)
-    if #pending == 0 then return end
-    local keys = {}
-    for _, item in ipairs(pending) do
+-- Reused across polls: the whole point is that an open settings window
+-- must not put pressure on the collector four times a second.
+local pendingBuf = {}
+local keyBuf = {}
+
+local function commit(cfg, count)
+    if count == 0 then return end
+    for i = 1, count do
+        local item = pendingBuf[i]
         item.c.committed = item.value
         writeKey(cfg, item.c.key, toStored(item.c, item.value))
-        keys[#keys + 1] = item.c.key
+        keyBuf[i] = item.c.key
     end
+    for i = #keyBuf, count + 1, -1 do keyBuf[i] = nil end
     if M.onCommit then
-        guard.try("menu onCommit", function() M.onCommit(keys) end)
+        guard.try("menu onCommit", M.onCommit, keyBuf)
     end
+end
+
+local function addPending(count, c, value)
+    count = count + 1
+    local item = pendingBuf[count]
+    if item == nil then item = {}; pendingBuf[count] = item end
+    item.c, item.value = c, value
+    return count
 end
 
 function M.flush()
     local cfg = M.cfg
     if cfg == nil then return end
-    local pending = {}
-    for _, c in ipairs(S.controls) do
+    local count = 0
+    for i = 1, #S.controls do
+        local c = S.controls[i]
         if c.last ~= nil and c.last ~= c.committed then
-            pending[#pending + 1] = { c = c, value = c.last }
+            count = addPending(count, c, c.last)
         end
     end
-    commit(cfg, pending)
+    commit(cfg, count)
+end
+
+-- Hoisted reflection, same reason as everywhere else: forty controls read
+-- four times a second is 160 reads a second, and the closure-per-read
+-- style also built a fresh label string ("read control " .. key) for each
+-- one, purely to have something to print if it failed.
+local function rawIsChecked(c) return c.widget:IsChecked() end
+local function rawSliderValue(c) return c.widget:GetValue() end
+local function rawSetReadout(c, s) c.readout:SetText(FText(s)) end
+
+local function readControl(c)
+    if c.kind == "bool" then
+        local ok, v = pcall(rawIsChecked, c)
+        if not ok or type(v) ~= "boolean" then return nil end
+        return v
+    end
+    local ok, raw = pcall(rawSliderValue, c)
+    if not ok or type(raw) ~= "number" then return nil end
+    local v = math.floor(raw + 0.5)
+    if c.step and c.step > 1 then v = math.floor(v / c.step + 0.5) * c.step end
+    if c.min and v < c.min then v = c.min end
+    if c.max and v > c.max then v = c.max end
+    return v
 end
 
 function M.poll(cfg)
@@ -522,32 +575,24 @@ function M.poll(cfg)
     -- keep the cursor alive; the game puts it back every frame otherwise
     applyInputMode(controller(), S.widget)
     local now = os.clock()
-    local pending = {}
-    for _, c in ipairs(S.controls) do
-        local ok, cur = guard.try("read control " .. c.key, function()
-            if c.kind == "bool" then return c.widget:IsChecked() end
-            local v = math.floor(c.widget:GetValue() + 0.5)
-            if c.step and c.step > 1 then v = math.floor(v / c.step + 0.5) * c.step end
-            if c.min and v < c.min then v = c.min end
-            if c.max and v > c.max then v = c.max end
-            return v
-        end)
-        if ok and cur ~= nil then
+    local count = 0
+    for i = 1, #S.controls do
+        local c = S.controls[i]
+        local cur = readControl(c)
+        if cur ~= nil then
             if cur ~= c.last then
                 c.last = cur
                 c.changedAt = now
-                if c.readout then
-                    guard.get(function() c.readout:SetText(FText(tostring(cur))) end)
-                end
+                if c.readout then pcall(rawSetReadout, c, tostring(cur)) end
             end
             local isSlider = (c.kind ~= "bool")
             if cur ~= c.committed
                and (not isSlider or (now - (c.changedAt or 0)) >= SLIDER_COMMIT_DELAY) then
-                pending[#pending + 1] = { c = c, value = cur }
+                count = addPending(count, c, cur)
             end
         end
     end
-    commit(cfg, pending)
+    commit(cfg, count)
 end
 
 return M

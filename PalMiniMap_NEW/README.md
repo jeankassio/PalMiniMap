@@ -1,4 +1,4 @@
-# PalMiniMap 2.0 — native minimap for Palworld
+# PalMiniMap 2.1 — native minimap for Palworld
 
 A complete rewrite. No blueprint, **no `.pak`**, no bundled assets — the whole
 mod is UE4SS Lua driving UMG, drawing the game's own world map texture and the
@@ -134,6 +134,99 @@ transform is correct, the player marker sits where it should, and the default
 axis orientation (north up) is right — the constants decoded from
 `DT_WorldMapUIData` are good, so the orientation controls are only an escape
 hatch.
+
+**Fixed in 2.1.0 — the freeze while using the settings window, and the pals
+that showed as arrows:**
+
+**The freeze.** The report was precise and it is what made this findable: while
+checkboxes were being clicked in the F5 window, the mod stopped dead — the menu
+would not close, the minimap froze on its last frame, **and the game kept
+running**. Nothing else produces exactly that. Both widgets were still in the
+viewport, so the engine was fine; only our game-thread work had stopped. That is
+what it looks like when UE4SS removes its own `EngineTick` hook after the Lua
+registry has been corrupted — the same failure as the 2.0.5 crash, but this time
+it did not take the game down with it.
+
+2.0.6 cut the number of threads taking Lua registry references from five to one,
+which made it rare. It did not make it impossible, because the remaining race is
+not between two timer threads — it is between the **timer thread taking** a
+reference (`ExecuteInGameThread` → `luaL_ref`) and the **game thread releasing**
+the previous one (`luaL_unref`) as a pump returns. The wider the pump, the wider
+that window, and a menu commit is the widest pump there is: it tears the minimap
+down and rebuilds a couple of hundred UMG widgets. Meanwhile the 33 ms timer kept
+firing straight through it and queuing *more* pumps behind the slow one, each of
+which would do the same work again. Four changes, and the first three are
+structural:
+
+- **One dispatch in flight at a time.** The timer thread will not take a new
+  reference while the game thread is still inside the last pump. This also bounds
+  the backlog at one, so a slow pump can no longer cascade.
+- **A gap after a pump ends** before the next reference is taken, so the new
+  `luaL_ref` cannot land on top of UE4SS's `luaL_unref` for the one that just
+  finished. It also recovers on its own if a dispatch is simply dropped, which
+  happens across a world transition, instead of deadlocking on the in-flight flag.
+- **The key queue is a fixed ring buffer now.** It used to append to a growing
+  table and swap in a fresh one on every drain. Both of those **allocate**, and
+  the append runs on UE4SS's input thread while the game thread is running our
+  pump — and any allocation can advance Lua's incremental collector, which is
+  precisely the corruption that surfaces later as "Ref was not function". Every
+  slot is preallocated, so a key press writes one existing array entry and one
+  number: no allocation, no collector, no race. (Holding an arrow key in edit mode
+  is how the original 2.0.5 crash was reproduced. That path is now allocation-free
+  end to end.)
+- **Rebuilds are coalesced.** A rebuild destroys and reconstructs up to 260
+  widgets, and clicking "Circular shape" twice — or holding `+` in edit mode — ran
+  one per key press, back to back. One rebuild 250 ms after the first request
+  absorbs a whole burst and is not perceptible. Verified: a 20-press resize burst
+  now costs **one** rebuild instead of twenty.
+- Class-path lookups in `render.lua` and `menu.lua` are memoised. Every one of
+  those 260 widgets did its own `StaticFindObject` on the same half-dozen class
+  paths, on the game thread, while the player was still clicking.
+- The settings window's own polling — forty controls, four times a second — no
+  longer builds a closure and an error-label string per control per tick.
+
+If it ever does happen again, the log now says so explicitly instead of going
+silent: the timer thread notices that the game thread has not run a pump for
+several seconds and prints one line naming the engine tick hook.
+
+**Pals shown as arrows, and not all pals shown.** One cause, and it was the
+2.0.8 fix's shadow. 2.0.6 subtracted `FindAllOf("PalNPC")` from
+`FindAllOf("PalCharacter")` and erased every pal, because `PalNPC` is a
+*superclass* of wild pals on this build. 2.0.8 detected that and stopped
+subtracting — which left the **humans in the pal list**, drawn with the generic
+member marker (the arrows) and, worse, eating the `maxPalIcons` budget, so real
+pals fell off the end of the distance-sorted list.
+
+Neither the class tree nor its inverse is safe to hard-code, so the question is
+answered directly instead: **a pal has a species icon.** The tribe comes out of
+the actor name and `T_<Tribe>_icon_normal` either exists in the game's content or
+it does not. That is a fact about the actor, not about a hierarchy a game update
+can rearrange. Everything that resolves is a pal and gets its portrait;
+everything that does not is a human and goes to the NPC list, where "Show NPC
+humans" controls it.
+
+The guards matter as much as the test, because this is the third attempt at it:
+
+- Until **one** icon has actually resolved, the path format is unproven on this
+  build, so nothing is filtered and behaviour is exactly what it was. That is what
+  makes this incapable of repeating 2.0.6.
+- A negative is never taken on the first try. Palworld streams its assets, so a
+  probe during a load screen can come back empty for a species that is perfectly
+  real; it takes three scans in a row, at most one probe per tribe per scan, and
+  the negatives are dropped again on a world change while the positives are kept.
+- Probes are budgeted per scan, so a crowd of unfamiliar actors cannot cause a
+  hitch, and the tribes that never resolved are logged once by name.
+
+Two things fall out for free: `FindAllOf("PalNPC")` is gone entirely — a full
+UObject-array walk every scan for a result we had already decided to throw away —
+and the species icon path is now resolved **once at scan time** instead of being
+`string.format`'d for every pal on every frame (about 480 throwaway strings a
+second at the default settings).
+
+A related render bug went with it: when neither a marker's texture nor its
+fallback resolved, the brush was left alone — so the pool slot kept showing
+whatever marker used it last, a chest where a pal should be. An unresolved slot
+now stays hidden, and retries on the next update.
 
 **Fixed in 2.0.9 — the Esc menu, and the stuttering:**
 

@@ -228,22 +228,92 @@ M.STATIC_PAD = 15000
 -- ---------------------------------------------------------------
 local nearScratch = {}
 
--- WHY THIS GUARD EXISTS - it is the 2.0.6 "no pals on the minimap" bug.
+-- ---------------------------------------------------------------
+-- Telling a pal from a human, WITHOUT guessing at the class tree
 --
--- FindAllOf matches a class AND everything derived from it, so
--- FindAllOf("PalCharacter") also returns the local player, other players
--- and NPCs. 2.0.6 subtracted the PalPlayerCharacter and PalNPC scans from
--- it to stop drawing those as pals. That is correct only if those classes
--- are a strict SUBSET of PalCharacter - and on this game build PalNPC is
--- not: wild pals derive from it too, so the subtraction removed every pal
--- and the minimap showed none at all.
+-- THE HISTORY, because two releases got this wrong in opposite ways.
+-- 2.0.6 subtracted FindAllOf("PalNPC") from FindAllOf("PalCharacter") to
+-- stop drawing NPC humans as pals, and erased EVERY pal: on this build
+-- PalNPC is a SUPERCLASS of wild pals, not a sibling class. 2.0.8 noticed
+-- that and stopped subtracting - which put the humans back INTO the pal
+-- list, where they were drawn with the generic member marker (the arrows
+-- the player reported) and, worse, ate the maxPalIcons budget, so real
+-- pals fell off the end of the list. Both halves of "not all pals show,
+-- some show as arrows" are that one line.
 --
--- Rather than hard-code a hierarchy that a game update can change, a class
--- is only trusted as an exclusion set if it comes back holding a small
--- part of the pal list. One that holds most of it is a superclass, so it
--- is neither subtracted from the pals nor drawn as its own kind of marker
--- (drawing it would just duplicate every pal under a generic icon). It
--- says so in the log, once.
+-- Neither the class tree nor its inverse is a safe thing to hard-code, so
+-- the question is answered directly instead: A PAL HAS A SPECIES ICON.
+-- The tribe comes out of the actor name and the icon asset either exists
+-- in the game's content or it does not. That is a fact about the actor,
+-- not about a hierarchy a game update can rearrange.
+--
+-- The safety valve is as important as the test: until at least one icon
+-- has actually resolved, we do not know the path format is right on this
+-- build, so NOTHING is filtered and behaviour is exactly what it was.
+-- That is what makes this incapable of repeating 2.0.6.
+-- ---------------------------------------------------------------
+local iconForTribe = {}         -- tribe -> asset path. POSITIVE results only,
+                                -- and permanent: an asset does not stop existing
+local notAPal = {}              -- tribe -> true. Negative results, and they are
+                                -- NOT permanent - see below
+local iconMisses = {}           -- tribe -> failed probes so far
+local probedAt = {}             -- tribe -> the scan that last probed it
+local iconFormatWorks = false   -- one resolved icon proves the path format
+local PROBE_PER_SCAN = 6        -- LoadAsset is synchronous: spread the cost
+local MISS_RETRIES = 3          -- before a tribe is declared "not a species"
+local probesLeft, scanSerial = 0, 0
+local noIconNames, noIconCount = {}, 0
+local reportedNoIcon = false
+
+local function assetExists(path)
+    local o = guard.get(StaticFindObject, path)
+    if o ~= nil and guard.alive(o) then return true end
+    guard.get(LoadAsset, path)
+    o = guard.get(StaticFindObject, path)
+    return o ~= nil and guard.alive(o)
+end
+
+-- Returns the icon path for a real pal species, `false` for something that
+-- has none (a human), or nil while we have not settled the question.
+--
+-- A NEGATIVE IS NEVER TAKEN ON THE FIRST TRY. Palworld streams its assets:
+-- a probe that runs during a load screen can come back empty for a species
+-- that is perfectly real, and caching that permanently would draw that
+-- species as a human for the rest of the session. It takes MISS_RETRIES
+-- scans in a row, at most one probe per tribe per scan, and the negatives
+-- are dropped again on a world change (M.forget) while the positives are
+-- kept. Until it is settled the actor is treated as a pal, which is the
+-- pre-2.1.0 behaviour and therefore always the safe direction to be wrong.
+local function speciesIcon(tribe)
+    if tribe == nil or tribe == "" then return false end
+    local hit = iconForTribe[tribe]
+    if hit ~= nil then return hit end
+    if notAPal[tribe] then return false end
+    if probesLeft <= 0 or probedAt[tribe] == scanSerial then return nil end
+    probedAt[tribe] = scanSerial
+    probesLeft = probesLeft - 1
+    local path = string.format(PAL_ICON_FMT, tribe, tribe)
+    if assetExists(path) then
+        iconForTribe[tribe] = path
+        iconMisses[tribe] = nil
+        iconFormatWorks = true
+        return path
+    end
+    local misses = (iconMisses[tribe] or 0) + 1
+    iconMisses[tribe] = misses
+    if misses < MISS_RETRIES then return nil end
+    notAPal[tribe] = true
+    if noIconCount < 12 then
+        noIconCount = noIconCount + 1
+        noIconNames[noIconCount] = tribe
+    end
+    return false
+end
+
+-- PalPlayerCharacter is still used as an exclusion set - other players are
+-- drawn by their own marker and must not also appear as pals. Unlike
+-- PalNPC it cannot plausibly be a superclass of pals, but the ratio guard
+-- costs nothing and says so in the log if a build ever surprises us.
 local EXCLUSION_MAX_SHARE = 0.6
 local rejectedClass = {}
 
@@ -263,11 +333,12 @@ local reportedScan = false
 
 function M.scanDynamic(cfg, px, py, zoom, playerPawn)
     local maxD2 = keepRadius2(zoom)
+    probesLeft, scanSerial = PROBE_PER_SCAN, scanSerial + 1
 
     S.pals, S.players, S.npcs = {}, {}, {}
 
-    -- the raw list comes first: the exclusion guard above needs its size
-    local rawPals = cfg.showPals and findAll("PalCharacter", "pals") or EMPTY
+    local wantCharacters = cfg.showPals or cfg.showNPCs
+    local rawPals = wantCharacters and findAll("PalCharacter", "characters") or EMPTY
     local palCount = #rawPals
 
     -- Excluded by actor NAME: names are unique within a level, and
@@ -287,13 +358,9 @@ function M.scanDynamic(cfg, px, py, zoom, playerPawn)
     -- not also come back as an "other player": 2.0.5 stacked a second
     -- icon underneath the arrow, permanently.
     local selfName = playerPawn ~= nil and exclude(playerPawn) or nil
-    local nPlayers, nNpcs = 0, 0
+    local nPlayers = 0
 
-    -- A class already proven to be a superclass of pals is not scanned
-    -- again at all: FindAllOf is a full walk of the UObject array, and
-    -- doing one every four seconds for a result we have decided to throw
-    -- away is pure frame time.
-    if (cfg.showPlayers or cfg.showPals) and not rejectedClass["PalPlayerCharacter"] then
+    if wantCharacters and not rejectedClass["PalPlayerCharacter"] then
         local all = findAll("PalPlayerCharacter", "players")
         if usableForExclusion("PalPlayerCharacter", #all, palCount) then
             nPlayers = #all
@@ -307,31 +374,18 @@ function M.scanDynamic(cfg, px, py, zoom, playerPawn)
         end
     end
 
-    if (cfg.showNPCs or cfg.showPals) and not rejectedClass["PalNPC"] then
-        local all = findAll("PalNPC", "NPC humans")
-        if usableForExclusion("PalNPC", #all, palCount) then
-            nNpcs = #all
-            for i = 1, #all do
-                local a = all[i]
-                exclude(a)
-                if cfg.showNPCs then
-                    local x, y = actorLocation(a)
-                    if x ~= nil and dist2(x, y, px, py) <= maxD2 then
-                        S.npcs[#S.npcs + 1] = a
-                    end
-                end
-            end
-        end
-    end
-
-    if cfg.showPals then
-        local all = rawPals
+    -- There is no FindAllOf("PalNPC") any more. It was a full walk of the
+    -- UObject array every scan for a result we had already decided to
+    -- throw away, and the humans it was meant to find come out of the pass
+    -- below for free.
+    if wantCharacters then
         local near, n = nearScratch, 0
-        for i = 1, #all do
-            local a = all[i]
-            -- Distance FIRST. The name is only needed to test the exclusion
-            -- set, and reading it for every pal in the level - most of them
-            -- kilometres away - doubled the reflection cost of the scan.
+        for i = 1, palCount do
+            local a = rawPals[i]
+            -- Distance FIRST. The name is only needed for the exclusion
+            -- set and the species lookup, and reading it for every actor
+            -- in the level - most of them kilometres away - doubled the
+            -- reflection cost of the scan.
             local x, y = actorLocation(a)
             if x ~= nil then
                 local d = dist2(x, y, px, py)
@@ -346,29 +400,56 @@ function M.scanDynamic(cfg, px, py, zoom, playerPawn)
                 end
             end
         end
-        -- one line, once: enough to tell "no pals nearby" from "the filter
-        -- ate them", which is the question this whole guard exists for
-        if not reportedScan and palCount > 0 then
-            reportedScan = true
-            guard.log(string.format(
-                "pal scan: %d PalCharacters, %d players and %d NPCs excluded, %d within range",
-                palCount, nPlayers, nNpcs, n))
-        end
         -- table.sort only sees the live prefix
         for i = #near, n + 1, -1 do near[i] = nil end
         table.sort(near, byDistance)
+
+        -- Nearest first, so the icon budget always goes to what is closest.
         local limit = cfg.maxPalIcons
+        local nPals, nHumans = 0, 0
         for i = 1, n do
-            if #S.pals >= limit then break end
-            local a = near[i].actor
-            local shiny = isShiny(a)
-            if (not cfg.onlyShinyPals) or shiny then
-                S.pals[#S.pals + 1] = {
-                    actor = a, tribe = tribeOf(near[i].name),
-                    shiny = shiny, friend = isFriend(a, playerPawn),
-                }
+            local e = near[i]
+            local icon = speciesIcon(tribeOf(e.name))
+            -- nil  = not probed yet
+            -- false + format unproven = we have no basis to filter anything
+            local isPal = (icon ~= false) or (not iconFormatWorks)
+            if isPal then
+                nPals = nPals + 1
+                if cfg.showPals and #S.pals < limit then
+                    local a = e.actor
+                    local shiny = isShiny(a)
+                    if (not cfg.onlyShinyPals) or shiny then
+                        S.pals[#S.pals + 1] = {
+                            actor = a,
+                            -- resolved ONCE, at scan time. collect() used to
+                            -- string.format this path for every pal on every
+                            -- frame - 480 throwaway strings a second at the
+                            -- default settings.
+                            icon = (type(icon) == "string") and icon or nil,
+                            shiny = shiny, friend = isFriend(a, playerPawn),
+                        }
+                    end
+                end
+            else
+                nHumans = nHumans + 1
+                if cfg.showNPCs then S.npcs[#S.npcs + 1] = e.actor end
             end
         end
+
+        -- one line, once: enough to tell "no pals nearby" apart from "the
+        -- filter ate them", which is the question this whole thing exists for
+        if not reportedScan and palCount > 0 then
+            reportedScan = true
+            guard.log(string.format(
+                "character scan: %d PalCharacters, %d players excluded, %d in range -> %d pals, %d humans",
+                palCount, nPlayers, n, nPals, nHumans))
+        end
+        if not reportedNoIcon and iconFormatWorks and noIconCount > 0 then
+            reportedNoIcon = true
+            guard.log("no species icon for: " .. table.concat(noIconNames, ", ", 1, noIconCount)
+                .. " - drawn as NPC humans, not as pals (turn 'Show NPC humans' off to hide them)")
+        end
+
         -- do not keep actor references alive in the scratch table
         for i = 1, n do near[i].actor = nil end
     end
@@ -557,8 +638,9 @@ function M.collect(cfg)
             local x, y = actorLocation(p.actor)
             if x ~= nil then
                 local tex, tint = ICON.member, (p.friend and TINT.friend or WHITE)
-                if p.tribe then
-                    tex = string.format(PAL_ICON_FMT, p.tribe, p.tribe)
+                if p.icon then
+                    -- already a full path, resolved at scan time
+                    tex = p.icon
                     -- a species portrait is already full colour; only shiny
                     -- gets a highlight (and the size bump below)
                     tint = p.shiny and TINT.shiny or WHITE
@@ -595,6 +677,10 @@ function M.forget()
     S.lastScan = 0.0
     -- the per-kind caches hold world positions from the OLD level
     kindCache, kindSeen, rotation = {}, {}, 1
+    -- Species icons that RESOLVED are kept - the asset still exists. The
+    -- ones that did not are dropped, so a species first met during a load
+    -- screen gets another chance instead of being a "human" forever.
+    notAPal, iconMisses = {}, {}
     -- drop the actor references the pools would otherwise keep alive
     for i = 1, #nearScratch do nearScratch[i].actor = nil end
 end

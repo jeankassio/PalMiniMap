@@ -1,5 +1,5 @@
 -- =====================================================================
--- PalMiniMap 2.0.9 - a native minimap for Palworld
+-- PalMiniMap 2.1.0 - a native minimap for Palworld
 --
 -- No blueprint, no .pak, no shipped assets. The whole mod is this Lua
 -- script driving UMG through UE4SS reflection, drawing the game's own
@@ -28,17 +28,34 @@
 -- follows it down.
 --
 -- The fix is structural, not a guard:
---   * ONE LoopAsync. It is the only thread that ever calls
---     ExecuteInGameThread, so there is nothing to race with the game
---     thread's unref.
---   * It dispatches only when a sub-tick is actually due, so the idle
---     cost is one dispatch every 2 s instead of 27 a second.
+--   * ONE LoopAsync, dispatching only when a sub-tick is actually due, so
+--     the idle cost is one dispatch every 2 s instead of 27 a second.
 --   * KEY BINDS NO LONGER TOUCH THE GAME THREAD AT ALL. They only append
 --     a string to a queue - plain Lua, no reflection, no registry ref -
 --     and the pump drains that queue on the game thread. Besides taking
 --     the input thread out of the race, this removes the re-entrancy
 --     risk of appending to the engine tick's action list from inside a
 --     callback the engine tick itself may be dispatching.
+--
+-- 2.1.0 CORRECTS THE ANALYSIS ABOVE. Cutting it to one timer thread made
+-- this rare, and 2.0.6's note claimed there was "nothing left to race
+-- with". That was wrong, and the mod froze again while the settings window
+-- was being used - same corruption, but this time UE4SS only removed its
+-- tick hook instead of taking the game down. The surviving race is not
+-- between two timer threads: it is between the TIMER thread taking a
+-- reference and the GAME thread releasing the previous one as a pump
+-- returns, and it widens with the length of the pump. So, on top of the
+-- above (see the dispatcher near the bottom of this file):
+--   * at most ONE dispatch outstanding, so a reference is never taken
+--     while the game thread is inside our code;
+--   * a gap after a pump ENDS before the next reference is taken;
+--   * nothing on the input thread or the timer thread may ALLOCATE - an
+--     allocation can advance Lua's collector, and two threads collecting
+--     in one lua_State is the same corruption by another route. That is
+--     why the action queue is a fixed, preallocated ring buffer and why
+--     the due-check is pure arithmetic;
+--   * expensive work is coalesced rather than run per event, because a
+--     long pump is what opens the window in the first place.
 --
 -- So: never call ExecuteInGameThread, LoopAsync or any UObject method
 -- from a key bind here. Push an action name and let pump() do it.
@@ -377,6 +394,16 @@ local gameMenuWidgets = {}
 local gameMenuTries = 0
 local gameMenuRetryAt = 0.0
 
+-- The widgets die with their world, so the list and the search back-off
+-- are both reset on a transition. (Three places used to assign to a
+-- `gameMenuWidget` that no longer exists - a silent write to a global,
+-- which cleared nothing at all.)
+local function forgetGameMenu()
+    for i = #gameMenuWidgets, 1, -1 do gameMenuWidgets[i] = nil end
+    gameMenuTries = 0
+    gameMenuRetryAt = 0.0
+end
+
 local function anyMenuWidgetAlive()
     for i = 1, #gameMenuWidgets do
         if guard.alive(gameMenuWidgets[i]) then return true end
@@ -477,6 +504,20 @@ local function rebuildNow()
     ensureWidget()
 end
 
+-- ...but COALESCED, because a rebuild is by far the most expensive thing
+-- this mod ever does on the game thread: it destroys and reconstructs up
+-- to 260 UMG widgets. Clicking "Circular shape" twice, or holding +/- in
+-- edit mode, used to run one of those per key press or per menu commit,
+-- back to back, and that pile-up is what the freeze grew out of. One
+-- rebuild 250 ms after the first request absorbs a whole burst and is not
+-- perceptible.
+local REBUILD_DELAY = 0.25
+local rebuildAt = nil
+
+local function requestRebuild()
+    if rebuildAt == nil then rebuildAt = os.clock() + REBUILD_DELAY end
+end
+
 -- ---------------------------------------------------------------
 -- Sub-ticks
 -- ---------------------------------------------------------------
@@ -528,7 +569,7 @@ local function maintenanceTick()
         render.destroy()
         sources.forget()
         cachedPC = nil
-        gameMenuWidget = nil
+        forgetGameMenu()
         worldName = ""
         return
     end
@@ -538,8 +579,7 @@ local function maintenanceTick()
         sources.forget()
         menu.worldChanged(name)   -- the menu widget died with the old world
         worldmap.recalibrate()
-        gameMenuWidget = nil
-        gameMenuRetryAt = 0.0
+        forgetGameMenu()
         lastX, lastY = nil, nil
         beQuiet(nil)
     end
@@ -669,7 +709,7 @@ end
 
 resize = function(delta)
     cfg.size = config.clamp(cfg.size + delta, 120, 480)
-    rebuildNow()
+    requestRebuild()
     markDirty()
 end
 
@@ -720,7 +760,7 @@ menu.onCommit = function(keys)
         sources.forget()   -- the per-kind caches rebuild on the next tick
     end
     if rebuild then
-        rebuildNow()
+        requestRebuild()
     elseif relayout then
         local vw, vh = viewportSize()
         render.applyLayout(cfg, vw, vh)
@@ -767,27 +807,43 @@ local ACTIONS = {
     zoomOut   = function() zoomBy(1) end,
 }
 
--- Bounded, so a pump that has stopped for any reason cannot turn a stuck
--- key into unbounded memory growth.
+-- A FIXED RING BUFFER, and that is not a micro-optimisation.
+--
+-- The previous version appended to a growing table and the drain replaced
+-- that table with a fresh one. Both of those ALLOCATE - the append when
+-- the array part has to grow, the swap every drain - and the append runs
+-- on UE4SS's input thread while the game thread is running our pump. Any
+-- allocation can advance Lua's incremental collector, and two threads
+-- collecting in one lua_State is precisely the corruption that shows up
+-- later as "Ref was not function". Holding an arrow key in edit mode is
+-- the fastest way to make it happen, which is exactly how the original
+-- crash was reproduced.
+--
+-- Every slot is preallocated, so the input thread only ever writes an
+-- existing array entry and one number: no allocation, no collector, no
+-- race. The buffer is bounded, so a stuck key cannot grow anything either.
 local QUEUE_LIMIT = 32
 local queue = {}
-local queueCount = 0
+for i = 1, QUEUE_LIMIT do queue[i] = false end
+local qWrite, qRead = 0, 0
 
 local function request(name)
-    if queueCount >= QUEUE_LIMIT then return end
-    queueCount = queueCount + 1
-    queue[queueCount] = name
+    local w = qWrite + 1
+    if (w - qRead) > QUEUE_LIMIT then return end   -- full: drop the press
+    queue[((w - 1) % QUEUE_LIMIT) + 1] = name
+    qWrite = w
 end
 
 local function drainQueue()
-    if queueCount == 0 then return end
-    -- swap first: an input-thread append that lands during the drain goes
-    -- into the fresh table and is simply handled on the next tick
-    local pendingActions, pendingCount = queue, queueCount
-    queue, queueCount = {}, 0
-    for i = 1, pendingCount do
-        local fn = ACTIONS[pendingActions[i]]
-        if fn ~= nil then guard.try("action " .. pendingActions[i], fn) end
+    while qRead < qWrite do
+        qRead = qRead + 1
+        local slot = ((qRead - 1) % QUEUE_LIMIT) + 1
+        local name = queue[slot]
+        queue[slot] = false
+        local fn = ACTIONS[name]
+        -- the action name doubles as the error label: concatenating one
+        -- would allocate on every key press for no benefit
+        if fn ~= nil then guard.try(name, fn) end
     end
 end
 
@@ -800,24 +856,100 @@ local MAINT_MS  = 2000
 
 local lastMove, lastScan, lastMenu, lastMaint = 0.0, 0.0, 0.0, 0.0
 
--- Evaluated on the TIMER thread, so a tick with nothing to do costs no
--- game-thread dispatch and therefore no registry reference at all. Keep
--- it pure Lua - no reflection, no UObjects.
+-- ---------------------------------------------------------------
+-- ONE DISPATCH AT A TIME. This is the 2.1.0 freeze fix.
+--
+-- The symptom: while checkboxes were being clicked in the settings window,
+-- the mod stopped dead - the menu would not close, the minimap froze on
+-- its last frame, and the game itself kept running. Nothing else can
+-- produce exactly that: both widgets were still in the viewport, so the
+-- engine was fine; only our game-thread work had stopped. That is what it
+-- looks like when UE4SS removes its own EngineTick hook after the Lua
+-- registry has been corrupted - the same failure as the 2.0.5 crash, but
+-- without taking the game down with it.
+--
+-- 2.0.6 cut the number of threads making registry references to one, which
+-- made it rare. It did not make it impossible, because the remaining race
+-- is between the TIMER thread taking a reference (ExecuteInGameThread ->
+-- luaL_ref) and the GAME thread releasing the previous one (luaL_unref)
+-- when a pump returns. The wider the pump, the wider that window - and a
+-- menu commit is the widest pump there is, because it tears the minimap
+-- down and rebuilds a couple of hundred widgets. Meanwhile the 33 ms timer
+-- kept firing straight through it and queuing MORE pumps behind the slow
+-- one, each of which would do the same work again.
+--
+-- So the timer thread now:
+--   * never has more than one dispatch outstanding (`inFlight`), which
+--     both bounds the backlog and means a reference is never taken while
+--     the game thread is inside our code;
+--   * waits DISPATCH_GAP after a pump ENDS before taking the next
+--     reference, so the new luaL_ref cannot land on top of UE4SS's
+--     luaL_unref for the one that just finished;
+--   * recovers on its own if a dispatch is simply dropped (that happens
+--     across a world transition) instead of deadlocking on `inFlight`.
+--
+-- The predicate below still allocates nothing, deliberately: an allocation
+-- here can advance Lua's collector on the timer thread while the game
+-- thread is also collecting.
+-- ---------------------------------------------------------------
+local DISPATCH_GAP     = 0.033   -- seconds between a pump ending and the next ref
+local DISPATCH_TIMEOUT = 3.0     -- a dispatch this old was never delivered
+local STALL_LIMIT      = 3       -- consecutive losses before we say so
+
+local inFlight = false
+local sentAt = 0.0
+local endedAt = 0.0
+local stalls = 0
+local stallReported = false
+
+-- Evaluated on the TIMER thread. Returning true also CLAIMS the dispatch,
+-- because the loop body has no other way to tell us it went ahead.
 local function anythingDue()
-    if queueCount > 0 then return true end
-    if saveAt ~= nil and os.clock() >= saveAt then return true end
-    local now = os.clock() * 1000.0
-    if (now - lastMaint) >= MAINT_MS then return true end
-    if menu.isOpen() and (now - lastMenu) >= MENU_MS then return true end
-    if cfg.enabled then
-        if (now - lastMove) >= (cfg.moveIntervalMs or 100) then return true end
-        if (now - lastScan) >= (cfg.scanIntervalMs or 4000) then return true end
+    local now = os.clock()
+    if inFlight then
+        if (now - sentAt) < DISPATCH_TIMEOUT then return false end
+        -- never ran: let go and try once more
+        inFlight = false
+        stalls = stalls + 1
+        if stalls >= STALL_LIMIT and not stallReported then
+            stallReported = true
+            -- Safe to allocate here: by definition nothing of ours has run
+            -- on the game thread for at least nine seconds.
+            guard.log("the game thread has not run PalMiniMap's pump for "
+                .. tostring(math.floor(now - endedAt)) .. "s - UE4SS has most likely "
+                .. "removed its engine tick hook, and the mod cannot recover this "
+                .. "session. Please report the UE4SS.log.")
+        end
     end
-    return false
+    if (now - endedAt) < DISPATCH_GAP then return false end
+
+    local due = false
+    if qWrite ~= qRead then due = true
+    elseif saveAt ~= nil and now >= saveAt then due = true
+    elseif rebuildAt ~= nil and now >= rebuildAt then due = true
+    else
+        local ms = now * 1000.0
+        if (ms - lastMaint) >= MAINT_MS then due = true
+        elseif menu.isOpen() and (ms - lastMenu) >= MENU_MS then due = true
+        elseif cfg.enabled then
+            if (ms - lastMove) >= (cfg.moveIntervalMs or 100) then due = true
+            elseif (ms - lastScan) >= (cfg.scanIntervalMs or 4000) then due = true end
+        end
+    end
+    if not due then return false end
+    inFlight, sentAt = true, now
+    return true
 end
 
 local function pump()
+    stalls, stallReported = 0, false
     drainQueue()
+
+    -- Coalesced rebuilds, ahead of everything that reads the widget.
+    if rebuildAt ~= nil and os.clock() >= rebuildAt then
+        rebuildAt = nil
+        guard.try("rebuild", rebuildNow)
+    end
 
     local now = os.clock() * 1000.0
     local wantMaint = (now - lastMaint) >= MAINT_MS
@@ -854,6 +986,11 @@ local function pump()
     frameState = nil
     frameStateBuf.pawn = nil
     flushSave()
+
+    -- Release the timer thread LAST. UE4SS unrefs this callback right
+    -- after it returns, and DISPATCH_GAP keeps the next ref away from it.
+    endedAt = os.clock()
+    inFlight = false
 end
 
 -- ---------------------------------------------------------------
@@ -864,7 +1001,7 @@ guard.register("world transition hook", function()
         render.destroy()
         sources.forget()
         cachedPC = nil
-        gameMenuWidget = nil
+        forgetGameMenu()
         worldName = ""
         beQuiet(nil)
     end))
@@ -903,4 +1040,4 @@ guard.register("pump loop", function()
     LoopAsync(PUMP_MS, guard.loopBody("pump", pump, anythingDue))
 end)
 
-guard.log("PalMiniMap 2.0.9 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
+guard.log("PalMiniMap 2.1.0 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")

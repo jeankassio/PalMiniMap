@@ -78,9 +78,22 @@ function M.setViewport(w, h)
     return false
 end
 
+-- Class lookups are memoised. A rebuild constructs up to 260 widgets and
+-- every one of them used to do its own StaticFindObject on the same half
+-- dozen class paths - a name lookup through the whole object hierarchy,
+-- hundreds of times, on the game thread, while the player was still
+-- clicking in the settings window.
+local classCache = {}
+
 local function cls(path)
+    local hit = classCache[path]
+    if hit ~= nil and guard.alive(hit) then return hit end
     local obj = guard.get(StaticFindObject, path)
-    if obj and guard.alive(obj) then return obj end
+    if obj and guard.alive(obj) then
+        classCache[path] = obj
+        return obj
+    end
+    classCache[path] = nil
     return nil
 end
 
@@ -723,7 +736,11 @@ function M.update(cfg, player, marks, count)
                 -- called loadTexture for every icon every frame - a table
                 -- lookup plus an IsValid pcall per icon, ~1000 a second -
                 -- even though the answer had not changed.
-                if entry.want ~= m.texture then
+                -- `entry.tex == nil` also retries: a texture that was still
+                -- streaming in the first time this slot asked for it must
+                -- not leave the slot blank for good. loadTexture gives up
+                -- after MAX_TEX_ATTEMPTS, so the retry cannot run away.
+                if entry.want ~= m.texture or entry.tex == nil then
                     entry.want = m.texture
                     local want = m.texture
                     local mtex = want and loadTexture(want, cfg.mapQuality, false) or nil
@@ -731,9 +748,17 @@ function M.update(cfg, player, marks, count)
                         want = m.fallback
                         mtex = loadTexture(want, cfg.mapQuality, false)
                     end
-                    if mtex ~= nil and entry.tex ~= want then
-                        entry.tex = want
-                        pcall(rawSetBrush, entry.image, mtex)
+                    if mtex ~= nil then
+                        if entry.tex ~= want then
+                            entry.tex = want
+                            pcall(rawSetBrush, entry.image, mtex)
+                        end
+                    else
+                        -- NOTHING resolved. Leaving the brush alone showed
+                        -- whatever marker last used this pool slot - a chest
+                        -- where a pal should be. An empty slot is skipped
+                        -- below instead.
+                        entry.tex = nil
                     end
                 end
                 if m.tint ~= nil and entry.tint ~= m.tint then
@@ -746,9 +771,12 @@ function M.update(cfg, player, marks, count)
                     entry.angle = iconAngle
                     pcall(rawSetAngle, entry.image, iconAngle)
                 end
-                if not entry.inUse then
-                    setVisible(entry.image, true)
-                    entry.inUse = true
+                -- a slot with no resolved brush stays hidden rather than
+                -- showing the previous marker's icon
+                local show = entry.tex ~= nil
+                if entry.inUse ~= show then
+                    setVisible(entry.image, show)
+                    entry.inUse = show
                 end
             end
         end
