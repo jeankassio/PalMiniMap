@@ -1,5 +1,5 @@
 -- =====================================================================
--- PalMiniMap 2.1.0 - a native minimap for Palworld
+-- PalMiniMap 2.1.1 - a native minimap for Palworld
 --
 -- No blueprint, no .pak, no shipped assets. The whole mod is this Lua
 -- script driving UMG through UE4SS reflection, drawing the game's own
@@ -281,6 +281,7 @@ local function watchTeleport(p)
         local dx, dy = p.x - lastX, p.y - lastY
         if (dx * dx + dy * dy) > (TELEPORT_JUMP * TELEPORT_JUMP) then
             sources.forget()
+            lastDrawSourceVersion = -1
             beQuiet("teleport detected")
         end
     end
@@ -535,22 +536,41 @@ local function movementTick()
         render.setVisible(not hide)
     end
     if hide then return end
+
+    local zoom = render.effectiveZoom(cfg, p.speed)
+    local sourceVersion = sources.version()
+    local dirty = sources.staticDirty()
+
+    -- If neither the player state nor the source data changed, there is
+    -- nothing new to push through render.update(). Skipping the whole path
+    -- here removes a lot of idle churn when the minimap is open but the
+    -- player is standing still.
+    if not dirty
+       and sourceVersion == lastDrawSourceVersion
+       and p.x == lastDrawX and p.y == lastDrawY
+       and p.yaw == lastDrawYaw and p.speed == lastDrawSpeed
+       and zoom == lastDrawZoom then
+        return
+    end
+
     -- The teleport/streaming guard only has to keep us away from OTHER
     -- actors; the terrain and the player marker are the player's own pawn
     -- and plain arithmetic. 2.0.5 skipped the whole draw, so the minimap
     -- went blank for ten seconds after every load screen and every fast
     -- travel. Now it keeps drawing the map and just shows no markers.
     local marks, count = NO_MARKS, 0
-    if settled() then marks, count = sources.collect(cfg) end
+    if settled() then marks, count = sources.collect(cfg, p.x, p.y, zoom) end
     render.update(cfg, p, marks, count)
+
+    lastDrawX, lastDrawY, lastDrawYaw, lastDrawSpeed, lastDrawZoom = p.x, p.y, p.yaw, p.speed, zoom
+    lastDrawSourceVersion = sourceVersion
 end
 
 -- sources.scanStatic() only walks ONE object class per call now (see the
 -- note there), so it is called every scan tick rather than being held back
 -- for a slow timer: that is what turns one eleven-walk spike into eleven
--- ordinary ticks. The merged marker list is rebuilt from cached positions
--- on every call, with no reflection, so the markers still track the player
--- exactly.
+-- ordinary ticks. The static cache is rebuilt lazily by sources.collect(),
+-- so the expensive sort/merge is kept off the scan spike itself.
 local function scanTick()
     if not settled() then return end
     local p = frameState
@@ -568,6 +588,7 @@ local function maintenanceTick()
     if name == nil then
         render.destroy()
         sources.forget()
+        lastDrawSourceVersion = -1
         cachedPC = nil
         forgetGameMenu()
         worldName = ""
@@ -577,6 +598,7 @@ local function maintenanceTick()
         worldName = name
         render.destroy()
         sources.forget()
+        lastDrawSourceVersion = -1
         menu.worldChanged(name)   -- the menu widget died with the old world
         worldmap.recalibrate()
         forgetGameMenu()
@@ -659,6 +681,7 @@ end
 local function toggleMegazoom()
     cfg.megazoomActive = not cfg.megazoomActive
     sources.forget()          -- the scan radius changes with the zoom mode
+    lastDrawSourceVersion = -1
     markDirty()
     guard.log("megazoom " .. (cfg.megazoomActive and "on" or "off"))
 end
@@ -758,6 +781,7 @@ menu.onCommit = function(keys)
     end
     if rescan then
         sources.forget()   -- the per-kind caches rebuild on the next tick
+        lastDrawSourceVersion = -1
     end
     if rebuild then
         requestRebuild()
@@ -855,6 +879,8 @@ local MENU_MS   = 250
 local MAINT_MS  = 2000
 
 local lastMove, lastScan, lastMenu, lastMaint = 0.0, 0.0, 0.0, 0.0
+local lastDrawX, lastDrawY, lastDrawYaw, lastDrawSpeed, lastDrawZoom = nil, nil, nil, nil, nil
+local lastDrawSourceVersion = -1
 
 -- ---------------------------------------------------------------
 -- ONE DISPATCH AT A TIME. This is the 2.1.0 freeze fix.
@@ -1000,6 +1026,7 @@ guard.register("world transition hook", function()
     RegisterLoadMapPreHook(guard.callback("LoadMapPreHook", function()
         render.destroy()
         sources.forget()
+        lastDrawSourceVersion = -1
         cachedPC = nil
         forgetGameMenu()
         worldName = ""
@@ -1040,4 +1067,4 @@ guard.register("pump loop", function()
     LoopAsync(PUMP_MS, guard.loopBody("pump", pump, anythingDue))
 end)
 
-guard.log("PalMiniMap 2.1.0 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
+guard.log("PalMiniMap 2.1.1 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")

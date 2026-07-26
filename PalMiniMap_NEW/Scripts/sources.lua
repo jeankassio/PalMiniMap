@@ -93,6 +93,9 @@ local S = {
     lastScan = 0.0,
     reported = {},
     campNear = false,
+    version = 0,            -- bumps when scan data changes
+    staticDirty = false,    -- static list needs a rebuild
+    staticRebuildAt = 0.0,   -- throttle rebuilds so they do not spike
 }
 
 -- ---------------------------------------------------------------
@@ -181,6 +184,12 @@ local function alreadyCollected(actor)
 end
 
 local EMPTY = {}    -- shared: callers only ever read it
+
+local function wipe(t)
+    for i = #t, 1, -1 do
+        t[i] = nil
+    end
+end
 
 local function findAll(class, label)
     local found = guard.get(FindAllOf, class)
@@ -331,11 +340,19 @@ end
 
 local reportedScan = false
 
+local function addExcluded(excluded, actor)
+    local n = actorName(actor)
+    if n ~= nil then
+        excluded[n] = true
+    end
+    return n
+end
+
 function M.scanDynamic(cfg, px, py, zoom, playerPawn)
     local maxD2 = keepRadius2(zoom)
     probesLeft, scanSerial = PROBE_PER_SCAN, scanSerial + 1
 
-    S.pals, S.players, S.npcs = {}, {}, {}
+    wipe(S.pals); wipe(S.players); wipe(S.npcs)
 
     local wantCharacters = cfg.showPals or cfg.showNPCs
     local rawPals = wantCharacters and findAll("PalCharacter", "characters") or EMPTY
@@ -345,28 +362,24 @@ function M.scanDynamic(cfg, px, py, zoom, playerPawn)
     -- identity comparison on reflected UObjects is not reliable across
     -- calls.
     local excluded = nil
-    local function exclude(actor)
-        local n = actorName(actor)
-        if n ~= nil then
-            excluded = excluded or {}
-            excluded[n] = true
-        end
-        return n
-    end
 
     -- The local player is drawn by the centred player marker, so it must
     -- not also come back as an "other player": 2.0.5 stacked a second
     -- icon underneath the arrow, permanently.
-    local selfName = playerPawn ~= nil and exclude(playerPawn) or nil
+    if playerPawn ~= nil then
+        excluded = excluded or {}
+    end
+    local selfName = playerPawn ~= nil and addExcluded(excluded, playerPawn) or nil
     local nPlayers = 0
 
     if wantCharacters and not rejectedClass["PalPlayerCharacter"] then
         local all = findAll("PalPlayerCharacter", "players")
         if usableForExclusion("PalPlayerCharacter", #all, palCount) then
             nPlayers = #all
+            excluded = excluded or {}
             for i = 1, #all do
                 local a = all[i]
-                local n = exclude(a)
+                local n = addExcluded(excluded, a)
                 if cfg.showPlayers and n ~= selfName then
                     S.players[#S.players + 1] = a
                 end
@@ -455,6 +468,7 @@ function M.scanDynamic(cfg, px, py, zoom, playerPawn)
     end
 
     S.lastScan = os.clock()
+    S.version = S.version + 1
 end
 
 -- ---------------------------------------------------------------
@@ -465,7 +479,8 @@ end
 -- frame spike you can feel - it was a large part of the 2.0.8 stuttering.
 -- Only ONE class is scanned per call once things have settled (three
 -- while a kind has never been looked at, so the map fills in quickly
--- after a load), and the merged list is rebuilt from per-kind caches.
+-- after a load), and the expensive rebuild is deferred until the draw
+-- path actually needs fresh static markers.
 --
 -- This is only sound because these things do not move: a cache scanned
 -- thirty seconds ago is still exactly right, apart from items that have
@@ -503,6 +518,7 @@ local function scanOneKind(cfg, spec)
     end
     for i = #list, count + 1, -1 do list[i] = nil end
     kindSeen[spec.kind] = true
+    return true
 end
 
 local staticScratch = {}
@@ -555,6 +571,8 @@ local function rebuildStatic(cfg, px, py, zoom)
         o.x, o.y, o.kind = slot.x, slot.y, slot.kind
     end
     for i = #out, limit + 1, -1 do out[i] = nil end
+    S.staticDirty = false
+    S.staticRebuildAt = os.clock()
 end
 
 function M.scanStatic(cfg, px, py, zoom)
@@ -565,30 +583,39 @@ function M.scanStatic(cfg, px, py, zoom)
         if wantedKind(cfg, spec) and not kindSeen[spec.kind] then budget = 3; break end
     end
 
+    local changed = false
     local checked = 0
     while budget > 0 and checked < #STATIC_KINDS do
         local spec = STATIC_KINDS[rotation]
         rotation = (rotation % #STATIC_KINDS) + 1
         checked = checked + 1
         if wantedKind(cfg, spec) then
-            scanOneKind(cfg, spec)
+            if scanOneKind(cfg, spec) then
+                changed = true
+            end
             budget = budget - 1
         elseif kindCache[spec.kind] ~= nil then
             kindCache[spec.kind] = nil     -- turned off: drop its markers
             kindSeen[spec.kind] = nil
+            changed = true
         end
     end
 
-    rebuildStatic(cfg, px, py, zoom)
+    if changed then
+        S.staticDirty = true
+        S.version = S.version + 1
+    end
+    -- rebuildStatic() is deferred to collect() so this scan stays spread out.
 end
 
 -- Base camp proximity is recomputed from the stored camp positions on
 -- every dynamic scan: the camps do not move, but the player does.
 function M.updateProximity(cfg, px, py)
     if not cfg.autohideInBase then S.campNear = false; return end
+    local camps = kindCache.camp or S.camps
     local r2 = cfg.baseCampRadius * cfg.baseCampRadius
-    for i = 1, #S.camps do
-        if dist2(S.camps[i].x, S.camps[i].y, px, py) <= r2 then
+    for i = 1, #camps do
+        if dist2(camps[i].x, camps[i].y, px, py) <= r2 then
             S.campNear = true
             return
         end
@@ -598,6 +625,8 @@ end
 
 function M.insideBaseCamp() return S.campNear end
 function M.lastScanAt() return S.lastScan end
+function M.version() return S.version end
+function M.staticDirty() return S.staticDirty end
 
 -- ---------------------------------------------------------------
 -- draw list
@@ -619,7 +648,14 @@ local function emit(n, x, y, tex, size, tint, fallback, isPal)
     return n
 end
 
-function M.collect(cfg)
+local STATIC_REBUILD_GAP = 0.75
+
+function M.collect(cfg, px, py, zoom)
+    local now = os.clock()
+    if S.staticDirty and (S.staticRebuildAt == 0.0 or (now - S.staticRebuildAt) >= STATIC_REBUILD_GAP) then
+        rebuildStatic(cfg, px, py, zoom)
+    end
+
     local n = 0
     local isz = cfg.iconSize
 
@@ -671,10 +707,13 @@ function M.collect(cfg)
 end
 
 function M.forget()
-    S.pals, S.players, S.npcs = {}, {}, {}
-    S.static, S.camps = {}, {}
+    wipe(S.pals); wipe(S.players); wipe(S.npcs)
+    wipe(S.static); wipe(S.camps)
     S.campNear = false
     S.lastScan = 0.0
+    S.staticDirty = false
+    S.staticRebuildAt = 0.0
+    S.version = S.version + 1
     -- the per-kind caches hold world positions from the OLD level
     kindCache, kindSeen, rotation = {}, {}, 1
     -- Species icons that RESOLVED are kept - the asset still exists. The

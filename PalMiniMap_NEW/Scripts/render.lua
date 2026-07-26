@@ -39,6 +39,8 @@ local MAP_TEXTURE = "/Game/Pal/Texture/UI/Map/T_WorldMap.T_WorldMap"
 local CIRCLE_TEXTURE = "/Game/Pal/Texture/UI/Map/T_prt_map_circle_eff.T_prt_map_circle_eff"
 local PLAYER_TEXTURE = "/Game/Pal/Texture/UI/InGame/T_icon_map_player.T_icon_map_player"
 local MAX_TEX_ATTEMPTS = 8
+local TEXTURE_LOAD_BUDGET = 2
+local TEXTURE_RETRY_SECONDS = 0.75
 
 local S = {
     widget = nil, tree = nil,
@@ -54,6 +56,13 @@ local S = {
     pool = {},              -- { image=, slot=, inUse=, tex=, tint=, angle=, size= }
     textures = {},          -- asset path -> UTexture2D
     texAttempts = {},
+    pendingPaths = {},      -- FIFO queue of texture paths waiting to load
+    pendingHead = 1,
+    pendingTail = 0,
+    pendingQueued = {},     -- path -> true while it is queued
+    pendingLevel = {},      -- path -> desired quality level
+    pendingMap = {},        -- path -> true for map textures
+    pendingDue = {},        -- path -> earliest retry time
     quality = nil,
     reportedSize = false,
     visible = false,
@@ -158,8 +167,65 @@ local function loadTexture(path, level, isMap)
         tuneTexture(tex, level or S.quality, isMap)
     end
     return tex
+
 end
 M.loadTexture = loadTexture
+
+-- Queue texture loads so icon discovery does not repeatedly synchronously
+-- load new assets inside the hot draw path. The actual load still has to
+-- happen on the game thread, but it is spread across frames instead of
+-- happening all at once when a fresh marker scrolls into view.
+local function requestTextureLoad(path, level, isMap)
+    if path == nil or path == "" then return nil end
+    local cached = S.textures[path]
+    if cached ~= nil and guard.alive(cached) then return cached end
+    local now = os.clock()
+    local due = S.pendingDue[path]
+    if due ~= nil and now < due then return nil end
+    S.pendingLevel[path] = level
+    S.pendingMap[path] = isMap == true
+    if S.pendingQueued[path] then return nil end
+    S.pendingTail = S.pendingTail + 1
+    S.pendingPaths[S.pendingTail] = path
+    S.pendingQueued[path] = true
+    return nil
+end
+
+local function flushTextureLoads()
+    local now = os.clock()
+    local budget = TEXTURE_LOAD_BUDGET
+    while budget > 0 and S.pendingHead <= S.pendingTail do
+        local path = S.pendingPaths[S.pendingHead]
+        S.pendingPaths[S.pendingHead] = nil
+        S.pendingHead = S.pendingHead + 1
+        S.pendingQueued[path] = nil
+        local cached = S.textures[path]
+        if cached ~= nil and guard.alive(cached) then
+            S.pendingDue[path] = nil
+        else
+            local tex = loadTexture(path, S.pendingLevel[path], S.pendingMap[path])
+            if tex == nil then
+                local attempts = S.texAttempts[path] or 0
+                local retry = TEXTURE_RETRY_SECONDS
+                if attempts >= MAX_TEX_ATTEMPTS then
+                    retry = 30.0
+                elseif attempts >= 4 then
+                    retry = 4.0
+                elseif attempts >= 2 then
+                    retry = 1.5
+                end
+                S.pendingDue[path] = now + retry
+            else
+                S.pendingDue[path] = nil
+            end
+        end
+        budget = budget - 1
+    end
+    if S.pendingHead > S.pendingTail then
+        S.pendingHead = 1
+        S.pendingTail = 0
+    end
+end
 
 -- Re-apply the quality setting to everything already loaded. Called when
 -- the menu changes it, never periodically - the flags live on the texture
@@ -315,6 +381,13 @@ function M.destroy()
     S.playerIcon, S.playerSlot = nil, nil
     S.playerSize, S.playerAngle = nil, nil
     S.pool = {}
+    S.pendingPaths = {}
+    S.pendingHead = 1
+    S.pendingTail = 0
+    S.pendingQueued = {}
+    S.pendingLevel = {}
+    S.pendingMap = {}
+    S.pendingDue = {}
     S.visible = false
     S.builtSize, S.builtPool, S.builtCircular = nil, nil, nil
 end
@@ -645,6 +718,11 @@ function M.update(cfg, player, marks, count)
     if type(player) ~= "table" or type(player.x) ~= "number" then return end
     count = count or 0
 
+    -- Spread new icon texture loads across frames. The marker can still be
+    -- shown with its fallback immediately, but the expensive synchronous
+    -- load no longer happens for a whole burst in one draw call.
+    flushTextureLoads()
+
     local size = cfg.size
     local half = size * 0.5
     local region = worldmap.regionFor(player.x, player.y)
@@ -740,26 +818,46 @@ function M.update(cfg, player, marks, count)
                 -- streaming in the first time this slot asked for it must
                 -- not leave the slot blank for good. loadTexture gives up
                 -- after MAX_TEX_ATTEMPTS, so the retry cannot run away.
-                if entry.want ~= m.texture or entry.tex == nil then
+                if entry.want ~= m.texture then
                     entry.want = m.texture
-                    local want = m.texture
-                    local mtex = want and loadTexture(want, cfg.mapQuality, false) or nil
-                    if mtex == nil and m.fallback then
-                        want = m.fallback
-                        mtex = loadTexture(want, cfg.mapQuality, false)
+                    entry.tex = nil
+                end
+
+                local brushPath, brushTex = nil, nil
+                local desired = entry.want
+                if desired ~= nil then
+                    brushPath = desired
+                    brushTex = S.textures[desired]
+                    if brushTex ~= nil and not guard.alive(brushTex) then
+                        brushTex = nil
                     end
-                    if mtex ~= nil then
-                        if entry.tex ~= want then
-                            entry.tex = want
-                            pcall(rawSetBrush, entry.image, mtex)
-                        end
-                    else
-                        -- NOTHING resolved. Leaving the brush alone showed
-                        -- whatever marker last used this pool slot - a chest
-                        -- where a pal should be. An empty slot is skipped
-                        -- below instead.
-                        entry.tex = nil
+                    if brushTex == nil then
+                        requestTextureLoad(desired, cfg.mapQuality, false)
                     end
+                end
+
+                if brushTex == nil and m.fallback then
+                    brushPath = m.fallback
+                    brushTex = S.textures[m.fallback]
+                    if brushTex ~= nil and not guard.alive(brushTex) then
+                        brushTex = nil
+                    end
+                    if brushTex == nil then
+                        brushTex = loadTexture(m.fallback, cfg.mapQuality, false)
+                    end
+                end
+
+                if brushTex ~= nil then
+                    if entry.tex ~= brushPath then
+                        entry.tex = brushPath
+                        pcall(rawSetBrush, entry.image, brushTex)
+                    end
+                else
+                    -- NOTHING resolved. Leaving the brush alone showed
+                    -- whatever marker last used this pool slot - a chest
+                    -- where a pal should be. An empty slot is skipped
+                    -- below instead.
+                    entry.tex = nil
                 end
                 if m.tint ~= nil and entry.tint ~= m.tint then
                     entry.tint = m.tint
