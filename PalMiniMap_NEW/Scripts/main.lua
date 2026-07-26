@@ -129,20 +129,32 @@ local function statics()
     return gameplayStatics
 end
 
+-- The LOCAL controller specifically. On a co-op host the object array
+-- holds a PlayerController per connected player, and taking whichever
+-- came first would centre the minimap on somebody else's character.
+local function isLocal(pc)
+    return guard.get(function() return pc:IsLocalPlayerController() end) == true
+end
+
 local function findController()
     -- FindFirstOf stops at the first match; FindAllOf walks the whole
     -- object array and builds a table. Only fall back to the slow one.
     if FindFirstOf ~= nil then
         local pc = guard.get(FindFirstOf, "PlayerController")
-        if guard.alive(pc) then return pc end
+        if guard.alive(pc) and isLocal(pc) then return pc end
     end
     local found = guard.get(FindAllOf, "PlayerController")
-    if type(found) == "table" then
-        for i = 1, #found do
-            if guard.alive(found[i]) then return found[i] end
+    if type(found) ~= "table" then return nil end
+    local fallback = nil
+    for i = 1, #found do
+        local pc = found[i]
+        if guard.alive(pc) then
+            if isLocal(pc) then return pc end
+            fallback = fallback or pc
         end
     end
-    return nil
+    -- a build where IsLocalPlayerController is unavailable still works
+    return fallback
 end
 
 local function playerController()
@@ -370,9 +382,10 @@ end
 -- ---------------------------------------------------------------
 -- Sub-ticks
 -- ---------------------------------------------------------------
+local NO_MARKS = {}
+
 local function movementTick()
     if not render.isBuilt() then return end
-    if not settled() then return end
     local p = frameState
     if p == nil then return end
     -- hide behind the game's own menus, and while inside a base camp if
@@ -383,7 +396,13 @@ local function movementTick()
         render.setVisible(not hide)
     end
     if hide then return end
-    local marks, count = sources.collect(cfg)
+    -- The teleport/streaming guard only has to keep us away from OTHER
+    -- actors; the terrain and the player marker are the player's own pawn
+    -- and plain arithmetic. 2.0.5 skipped the whole draw, so the minimap
+    -- went blank for ten seconds after every load screen and every fast
+    -- travel. Now it keeps drawing the map and just shows no markers.
+    local marks, count = NO_MARKS, 0
+    if settled() then marks, count = sources.collect(cfg) end
     render.update(cfg, p, marks, count)
 end
 
@@ -392,8 +411,8 @@ end
 -- of the UObject array, eleven of them - and doing that every 4 s was the
 -- single most expensive thing the mod did. Now it happens on a slow timer
 -- or when the player has actually travelled somewhere new.
-local STATIC_MIN_INTERVAL = 15000     -- ms
-local STATIC_MOVE_TRIGGER = 15000     -- world units
+local STATIC_MIN_INTERVAL = 15000            -- ms
+local STATIC_MOVE_TRIGGER = sources.STATIC_PAD or 15000   -- world units
 local lastStaticAt = 0.0
 local staticX, staticY = nil, nil
 
@@ -497,14 +516,23 @@ local function cycleCorner()
     markDirty()
 end
 
-local function zoomBy(delta)
+-- `dir` is -1 to zoom in, +1 to zoom out.
+--
+-- The step is MULTIPLICATIVE. 2.0.5 added or subtracted a flat 2000 world
+-- units, so crossing the 4 000 - 120 000 range took fifty-eight key
+-- presses, and the same press that barely moved the view when zoomed out
+-- halved it when zoomed in. A constant ratio feels the same at every
+-- level and crosses the range in about fifteen.
+local function zoomBy(dir)
     if menu.isOpen() then return end
     if editMode then
         -- in edit mode +/- resize the window instead, exactly as in 1.x
-        resize(delta < 0 and 10 or -10)
+        resize(dir < 0 and 10 or -10)
         return
     end
-    cfg.zoom = config.clamp(cfg.zoom + delta, cfg.zoomMin, cfg.zoomMax)
+    local factor = config.clamp(cfg.zoomFactor or 1.25, 1.05, 2.0)
+    if dir < 0 then factor = 1.0 / factor end
+    cfg.zoom = config.clamp(cfg.zoom * factor, cfg.zoomMin, cfg.zoomMax)
     markDirty()
 end
 
@@ -581,7 +609,11 @@ end
 -- was built at the wrong dimensions, and the axis controls have to be
 -- pushed into worldmap before the next draw.
 -- ---------------------------------------------------------------
-local REBUILD_KEYS = { size = true, maxPalIcons = true, maxPoiIcons = true }
+-- `circular` is here because the disc is real clipped geometry now, not a
+-- decal painted over a square map, so the shape is decided at build time.
+local REBUILD_KEYS = {
+    size = true, maxPalIcons = true, maxPoiIcons = true, circular = true,
+}
 
 menu.onCommit = function(keys)
     local rebuild, relayout, rescan = false, false, false
@@ -591,6 +623,8 @@ menu.onCommit = function(keys)
             -- the icon caps are applied at scan time, so the new limit
             -- only shows up once the world has been looked at again
             rescan = true
+        elseif key == "mapQuality" then
+            render.applyQuality(cfg)
         elseif key == "opacity" then relayout = true
         elseif key:sub(1, 5) == "axis." then worldmap.setAxis(cfg.axis)
         elseif key == "enabled" then render.setVisible(cfg.enabled)
@@ -622,8 +656,14 @@ end
 menu.env = {
     controller  = playerController,
     viewport    = viewportSize,
+    -- The world-name blocklist is a guess at what Palworld calls its
+    -- title screens, and getting it wrong reintroduces the 2.0.2 crash
+    -- (SetInputMode on a title-screen controller that is about to be
+    -- destroyed). "There is a pawn to control" is not a guess: the splash,
+    -- login and title flows have none, and a real world always does.
     isGameWorld = function()
-        return worldName ~= "" and not NON_GAME_WORLDS[worldName]
+        if worldName == "" or NON_GAME_WORLDS[worldName] then return false end
+        return playerPawn() ~= nil
     end,
 }
 
@@ -644,8 +684,8 @@ local ACTIONS = {
     right     = function() nudge(10, 0) end,
     up        = function() nudge(0, -10) end,
     down      = function() nudge(0, 10) end,
-    zoomIn    = function() zoomBy(-cfg.zoomStep) end,
-    zoomOut   = function() zoomBy(cfg.zoomStep) end,
+    zoomIn    = function() zoomBy(-1) end,
+    zoomOut   = function() zoomBy(1) end,
 }
 
 -- Bounded, so a pump that has stopped for any reason cannot turn a stuck
@@ -782,4 +822,4 @@ guard.register("pump loop", function()
     LoopAsync(PUMP_MS, guard.loopBody("pump", pump, anythingDue))
 end)
 
-guard.log("PalMiniMap 2.0.6 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
+guard.log("PalMiniMap 2.0.7 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")

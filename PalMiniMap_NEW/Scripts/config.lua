@@ -23,11 +23,26 @@ local DEFAULTS = {
     opacity            = 0.92,
     circular           = false,
 
+    -- Terrain sharpness. The map is the game's own texture magnified, so
+    -- the only thing that decides how sharp it looks is which mip level
+    -- the streamer keeps resident - see tuneTexture() in render.lua.
+    --   0 leave the streamer alone (lowest VRAM, softest terrain)
+    --   1 keep the world map texture fully resident
+    --   2 ...and the icon textures too
+    --   3 ...plus trilinear filtering and no streaming mip bias
+    mapQuality         = 2,
+    -- Escape hatch: point this at a different map asset if a game update
+    -- ever ships a more detailed one. Empty = the stock T_WorldMap.
+    terrainTexture     = "",
+
     -- how much of the world the window shows, in world units across
     zoom               = 22000,
     zoomMin            = 4000,
     zoomMax            = 120000,
-    zoomStep           = 2000,
+    -- MULTIPLIER per +/- press, not a flat amount: a constant ratio feels
+    -- the same whether you are zoomed right in or right out, and crosses
+    -- the whole range in about fifteen presses instead of fifty-eight.
+    zoomFactor         = 1.25,
 
     -- megazoom: the F1 "see the whole region" toggle from 1.x
     megazoom           = 260000,

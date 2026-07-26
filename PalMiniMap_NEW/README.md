@@ -75,7 +75,7 @@ machinery version 2 no longer has:
 |---|---|
 | Enable mod | `enabled` (F3) |
 | Minimap opacity | yes |
-| Minimap shape (circle/square) | yes — `circular` |
+| Minimap shape (circle/square) | yes — `circular`, real clipped geometry since 2.0.7 |
 | Autozoom while moving | yes — widens with walk/run/fly speed |
 | Rotation lock (north up) | yes — `rotateWithCamera` |
 | Lock all icon rotations to north | yes — `lockIconsNorth` |
@@ -95,7 +95,7 @@ machinery version 2 no longer has:
 | Show lifmunk effigies | yes |
 | Rescan frequency | yes — one control instead of five |
 | Keybinds F1–F5 | yes, same layout |
-| Minimap render resolution | **gone** — configured the scene capture |
+| Minimap render resolution | **gone** — configured the scene capture; the nearest equivalent is the new *Terrain quality*, which controls mip residency instead |
 | Minimap capture LOD bias | **gone** — same reason |
 | Edit mode "new size method" | **gone** — `+`/`-` always resize in edit mode |
 
@@ -134,6 +134,69 @@ transform is correct, the player marker sits where it should, and the default
 axis orientation (north up) is right — the constants decoded from
 `DT_WorldMapUIData` are good, so the orientation controls are only an escape
 hatch.
+
+**New in 2.0.7 — a genuinely circular minimap and a terrain quality control:**
+
+- **"Circular shape" now changes the SHAPE.** 2.0.5/2.0.6 drew a round decal on
+  top of a square map: the terrain stayed square and the corners still showed.
+  Making it really round is harder than it sounds — Slate clips to axis-aligned
+  **rectangles**, a real alpha mask needs a material (which cannot be authored
+  from Lua), and covering the corners with an opaque colour is not an option
+  because outside the circle you must see the *game*, not a black box.
+  So the disc is built from horizontal strips: each strip is its own
+  `ClipToBounds` canvas, exactly as wide as the circle is at that height, holding
+  its own copy of the map quad shifted to line up with its neighbours. The union
+  of the strips **is** the disc, and everything outside it was never drawn.
+  The strips are spaced by **angle**, not height, so they bunch up where the
+  outline actually turns: 31 strips on a 240 px minimap, worst-case radial error
+  2.99 px (1.2 %), verified numerically. The game's circular art is still drawn
+  on top, but as decoration over the seam rather than as the shape itself.
+  Per frame this costs one `SetPosition` per strip; the GPU still only rasterises
+  the pixels inside the disc. The shape is baked in at build time, so toggling it
+  rebuilds the widget.
+- **Terrain quality (F5 → "Terrain quality", 0–3).** The terrain looked soft for
+  a concrete reason: the map is the game's own `T_WorldMap` magnified several
+  times, and a magnified texture can only be as sharp as the mip that happens to
+  be **resident**. Palworld streams its UI textures and nothing asks for the world
+  map at full resolution until you open the map screen — so the minimap was
+  drawing a low mip. Forcing the mips resident is the whole fix. The setting
+  grades it because keeping every pal portrait at full resolution does cost VRAM:
+  0 leaves the streamer alone, 1 pins the world map, 2 pins the icons too
+  (default), 3 adds trilinear filtering and drops the streaming mip bias.
+- **A diagnostic line for whatever quality is left.** On the first draw the log
+  reports the terrain texture's real dimensions and how far it is being stretched
+  (e.g. `terrain texture 4096x4096; 240 px of minimap shows 62 texels (3.9x
+  magnification)`). If it still looks soft after the mips are pinned, the source
+  simply is not detailed enough — and the answer is the new `terrainTexture`
+  setting pointing at a better asset, not another slider.
+- **The minimap no longer goes blank for ten seconds after every load screen or
+  fast travel.** The teleport guard only has to keep the mod away from *other*
+  actors; the terrain and the player marker are the player's own pawn plus
+  arithmetic. It now keeps drawing the map through the quiet window and simply
+  shows no markers.
+- **Co-op: the minimap could follow the wrong player.** On a host, the object
+  array holds a `PlayerController` per connected player and the first one found
+  was used. It now prefers `IsLocalPlayerController()`.
+- **A safer title-screen guard.** Whether the menu may touch input mode was
+  decided from a blocklist of guessed world names; getting that wrong is what
+  crashed 2.0.2. It now also requires a player pawn to exist, which the splash,
+  login and title flows have none of.
+- **Points of interest could be missing right in front of you.** The static scan
+  kept everything within the visible radius of the position it ran at, but the
+  player may travel 15 000 units before the next one — so a chest just off the
+  edge at scan time stayed missing even close up. The static scan now keeps that
+  much margin beyond the view, from the same constant as the move trigger.
+- **`+`/`-` zoom is multiplicative.** A flat 2 000 units per press took
+  **fifty-eight** presses to cross the 4 000–120 000 range, and the same press
+  that barely moved the view when zoomed out halved it when zoomed in. A constant
+  1.25× ratio feels identical at every level and crosses the range in about
+  fifteen. (`zoomStep` is replaced by `zoomFactor`; an old value in a saved
+  settings file is ignored, not misread.)
+- Smaller ones: a texture that loaded once can be reloaded after a world change
+  (the retry counter used to keep counting up towards its permanent give-up
+  limit); `effectiveZoom` cannot divide by zero from a hand-edited settings file;
+  the "circular" rebuild check records what was *asked* for, so a failed strip
+  build cannot make the widget rebuild itself forever.
 
 **Fixed in 2.0.6 — crash a few seconds into edit mode, plus a scan overhaul:**
 

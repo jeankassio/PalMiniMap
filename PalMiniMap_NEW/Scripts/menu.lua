@@ -65,6 +65,7 @@ local LAYOUT = {
     { key = "size",              label = "Size",                     kind = "int", min = 120, max = 480 },
     { key = "opacity",           label = "Opacity",                  kind = "pct" },
     { key = "circular",          label = "Circular shape",           kind = "bool" },
+    { key = "mapQuality",        label = "Terrain quality (0 low - 3 sharp)", kind = "int", min = 0, max = 3 },
     { key = "zoom",              label = "Zoom (world units)",       kind = "int", min = 4000, max = 120000, step = 1000 },
     { key = "megazoom",          label = "Megazoom (F1) range",      kind = "int", min = 60000, max = 500000, step = 10000 },
     { key = "autozoom",          label = "Auto zoom out while moving", kind = "bool" },

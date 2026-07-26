@@ -158,6 +158,8 @@ local function alreadyCollected(actor)
     return asBool(guard.get(function() return actor.bPickedInClient end)) == true
 end
 
+local EMPTY = {}    -- shared: callers only ever read it
+
 local function findAll(class, label)
     local found = guard.get(FindAllOf, class)
     if type(found) == "table" and #found > 0 then
@@ -171,7 +173,7 @@ local function findAll(class, label)
         S.reported[class] = true
         guard.log(string.format("scan: %s -> '%s' found nothing", label, class))
     end
-    return {}
+    return EMPTY
 end
 
 local function dist2(ax, ay, bx, by)
@@ -185,11 +187,19 @@ local function byDistance(l, r) return l.d < r.d end
 -- used max(zoom, megazoom) - i.e. the 260 000 unit megazoom radius even
 -- while zoomed all the way in - so every scan sorted and kept hundreds of
 -- actors that could never be on screen.
-local function keepRadius2(zoom)
+local function keepRadius2(zoom, pad)
     local r = (zoom or 22000) * 0.85
     if r < 8000 then r = 8000 end
-    return r * r
+    return (r + (pad or 0)) ^ 2
 end
+
+-- How far the player may travel before the static list is refreshed, and
+-- therefore how much MARGIN the static scan has to keep beyond the visible
+-- radius. Without it a chest could sit just off the edge of the view at
+-- scan time and still be missing after the player walked right up to it.
+-- main.lua uses the same number as its "player moved somewhere new"
+-- trigger, so the two can never disagree.
+M.STATIC_PAD = 15000
 
 -- ---------------------------------------------------------------
 -- dynamic scan: pals, players, NPCs
@@ -295,7 +305,7 @@ end
 local staticScratch = {}
 
 function M.scanStatic(cfg, px, py, zoom)
-    local maxD2 = keepRadius2(zoom)
+    local maxD2 = keepRadius2(zoom, M.STATIC_PAD)
     local wantCamps = cfg.showBaseCamps or cfg.autohideInBase
 
     local found, n = staticScratch, 0
