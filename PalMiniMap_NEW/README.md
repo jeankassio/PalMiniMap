@@ -135,6 +135,43 @@ axis orientation (north up) is right — the constants decoded from
 `DT_WorldMapUIData` are good, so the orientation controls are only an escape
 hatch.
 
+**Fixed in 2.0.5 — the config window sat off the right-hand edge:**
+
+`GetViewportSize` reports **pixels**, but a UMG `CanvasPanel` positions its
+children in **slate units** — pixels divided by the UI's DPI scale. On a 4K
+screen Palworld runs a scale of about 2, so centring the window at x = 1570
+slate units put it at 3140 real pixels and it hung off the edge with its
+controls cut away. The same mistake pushed the minimap's edge-relative corner
+presets to x = 3560 slate units — 7120 pixels — i.e. entirely off screen at 4K.
+
+1.x divided by `GetViewportScale` for exactly this reason and the rewrite
+dropped it. The division now happens once, inside `viewportSize()`, so
+everything downstream (menu geometry, corner presets, edit mode) works in the
+units the canvas actually uses. Checked at 4K/scale 2, 4K/scale 1, 1440p/1.33,
+1080p/1 and 720p/0.67 — the window lands on screen in every case.
+
+**Fixed in 2.0.4 — the mod did nothing inside a world:**
+
+- **The minimap was built and never shown.** 2.0.2 decided "the game has a
+  full-screen UI open" from `pc.bShowMouseCursor`. Palworld leaves that flag
+  ON during ordinary gameplay, so the test was true permanently: the widget was
+  created, the scans ran (51 pals, 24 chests, 174 fast travel points in the
+  log), and every frame immediately hid it again. The heuristic is gone,
+  replaced by the actual widget — `WBP_InGameMainMenu` is the Esc menu, and
+  asking whether it is in the viewport is exact instead of inferred. It is
+  found on the 2 s maintenance tick and only re-checked per frame, so the
+  object-array walk never lands on the hot path. A `hideBehindGameUi` switch
+  turns the whole behaviour off.
+- **The menu was cut off with no scrollbar on the title screen.** Its canvas
+  slot used `SetAutoSize(true)`, which sizes the slot to its CONTENT — so the
+  `SizeBox` height override was ignored, the `ScrollBox` was never given a
+  bounded height, and the window simply grew past the bottom of the screen.
+  The slot now has an explicit size, clamped to the viewport and centred.
+  Checked from 1024x600 to 3840x2160: it fits every time.
+- F5 now logs every press. When the menu did not appear there was no line at
+  all, which gave no way to tell "the key never fired" from "it opened
+  invisible".
+
 **Fixed in 2.0.3 — crash when opening the menu on the title screen:**
 
 - **Root cause.** The menu cached the `PlayerController` and re-asserted the

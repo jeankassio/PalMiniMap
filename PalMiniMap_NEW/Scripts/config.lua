@@ -43,6 +43,9 @@ local DEFAULTS = {
     rotateWithCamera   = false,   -- false = north is always up
     lockIconsNorth     = true,    -- keep icons upright when the map rotates
 
+    -- hide while the game's own Esc menu is up
+    hideBehindGameUi   = true,
+
     autohideInBase     = false,   -- 1.x: "autohide minimap while in base camps"
     baseCampRadius     = 12000,   -- how close counts as "inside a base camp"
 

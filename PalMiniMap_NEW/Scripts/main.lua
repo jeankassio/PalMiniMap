@@ -181,13 +181,31 @@ local function currentWorldName()
     return tostring(n)
 end
 
--- Viewport size. UWidgetLayoutLibrary::GetViewportSize returns a single
--- FVector2D, which survives reflection cleanly; APlayerController::
--- GetViewportSize hands back two OUT parameters, which does not always
--- come through. Reading it via the controller was why the size was
--- unavailable and the corner presets collapsed. The last good value is
--- cached so a momentary failure never resets the layout.
+-- Viewport size, IN SLATE UNITS.
+--
+-- This distinction is the whole point. GetViewportSize reports PIXELS, but
+-- a UMG CanvasPanel positions its children in slate units, which are
+-- pixels divided by the UI's DPI scale. On a 4K screen Palworld runs a
+-- scale of about 2, so treating the pixel size as canvas space put the
+-- config window at x=1570 slate units - 3140 real pixels - and it hung off
+-- the right-hand edge. It also pushed the minimap's edge-relative corners
+-- clean off screen.
+--
+-- 1.x divided by GetViewportScale for exactly this reason; the rewrite
+-- dropped it. Everything downstream (menu geometry, corner presets, edit
+-- mode) works in slate units, so the division belongs here, once.
+--
+-- The size itself comes from UWidgetLayoutLibrary::GetViewportSize (a
+-- single FVector2D) rather than APlayerController::GetViewportSize (two
+-- OUT parameters, which does not survive reflection reliably). The last
+-- good value is cached so a momentary failure never resets the layout.
 local lastViewW, lastViewH = nil, nil
+
+local function viewportScale(pc, wll)
+    local s = guard.get(function() return wll:GetViewportScale(pc) end)
+    if type(s) == "number" and s > 0.1 then return s end
+    return 1.0
+end
 
 local function viewportSize()
     local pc = playerController()
@@ -195,36 +213,59 @@ local function viewportSize()
         local wll = guard.get(StaticFindObject,
             "/Script/UMG.Default__WidgetLayoutLibrary")
         if wll ~= nil then
+            local scale = viewportScale(pc, wll)
             local v = guard.get(function() return wll:GetViewportSize(pc) end)
             if v ~= nil then
                 local x = guard.get(function() return v.X end)
                 local y = guard.get(function() return v.Y end)
                 if type(x) == "number" and x > 0 and type(y) == "number" and y > 0 then
-                    lastViewW, lastViewH = x, y
-                    return x, y
+                    lastViewW, lastViewH = x / scale, y / scale
+                    return lastViewW, lastViewH
                 end
             end
-        end
-        local ok, x, y = guard.try("GetViewportSize", function()
-            return pc:GetViewportSize()
-        end)
-        if ok and type(x) == "number" and x > 0 and type(y) == "number" and y > 0 then
-            lastViewW, lastViewH = x, y
-            return x, y
+            local ok, px, py = guard.try("GetViewportSize", function()
+                return pc:GetViewportSize()
+            end)
+            if ok and type(px) == "number" and px > 0
+               and type(py) == "number" and py > 0 then
+                lastViewW, lastViewH = px / scale, py / scale
+                return lastViewW, lastViewH
+            end
         end
     end
     return lastViewW, lastViewH
 end
 
--- True while the game is showing a full-screen UI of its own (Esc menu,
--- inventory, the big map...). Palworld turns the mouse cursor on for all
--- of them, which is the cheapest reliable signal available from Lua. Our
--- own menu is excluded, so opening F5 still previews changes live.
+-- True while the game is showing its own pause/system menu.
+--
+-- 2.0.2 inferred this from pc.bShowMouseCursor. That was wrong: Palworld
+-- leaves the cursor flag ON during ordinary gameplay, so the test was true
+-- all the time and the minimap was hidden permanently - it was built, the
+-- scans ran, and nothing was ever drawn. Replaced with the actual widget:
+-- WBP_InGameMainMenu is the Esc menu, and asking whether it is in the
+-- viewport is exact rather than a guess.
+--
+-- FindAllOf walks the whole UObject array, so it runs on the 2 s
+-- maintenance tick only; the per-frame path just re-checks the cached
+-- widget, which is a single call.
+local GAME_MENU_CLASS = "WBP_InGameMainMenu_C"
+local gameMenuWidget = nil
+
+local function refreshGameMenuWidget()
+    if guard.alive(gameMenuWidget) then return end
+    gameMenuWidget = nil
+    local found = guard.get(FindAllOf, GAME_MENU_CLASS)
+    if type(found) ~= "table" then return end
+    for _, w in ipairs(found) do
+        if guard.alive(w) then gameMenuWidget = w; return end
+    end
+end
+
 local function gameUiOpen()
-    if menu.isOpen() then return false end
-    local pc = playerController()
-    if pc == nil then return false end
-    return guard.get(function() return pc.bShowMouseCursor end) == true
+    if not cfg.hideBehindGameUi then return false end
+    if menu.isOpen() then return false end   -- our own window may stay up
+    if not guard.alive(gameMenuWidget) then return false end
+    return guard.get(function() return gameMenuWidget:IsInViewport() end) == true
 end
 
 local function ensureWidget()
@@ -297,6 +338,7 @@ local function maintenanceTick()
     if NON_GAME_WORLDS[name] then return end
 
     watchTeleport(playerState())
+    refreshGameMenuWidget()
     ensureWidget()
     worldmap.calibrate()
 end
@@ -417,6 +459,10 @@ menu.env = {
 }
 
 local function toggleMenu()
+    -- logged unconditionally: when the menu did not appear in 2.0.3 there
+    -- was no line at all, which left no way to tell "key never fired" from
+    -- "opened but invisible"
+    guard.log("F5 pressed (world='" .. tostring(worldName) .. "')")
     menu.toggle(cfg, worldName)
 end
 
@@ -495,4 +541,4 @@ guard.register("menu poll loop", function()
         function() return menu.isOpen() end))
 end)
 
-guard.log("PalMiniMap 2.0.3 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
+guard.log("PalMiniMap 2.0.5 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")

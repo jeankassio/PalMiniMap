@@ -70,6 +70,7 @@ local LAYOUT = {
     { key = "autozoom",          label = "Auto zoom out while moving", kind = "bool" },
     { key = "rotateWithCamera",  label = "Rotate with camera",       kind = "bool" },
     { key = "lockIconsNorth",    label = "Keep icons upright",       kind = "bool" },
+    { key = "hideBehindGameUi",  label = "Hide behind the game's menu", kind = "bool" },
     { key = "autohideInBase",    label = "Hide while in a base camp", kind = "bool" },
     { key = "iconSize",          label = "Icon size",                kind = "int", min = 10, max = 40 },
 
@@ -318,22 +319,37 @@ function M.build(pc, cfg)
     -- UWidgetLayoutLibrary. Calling pc:GetViewportSize() here (two OUT
     -- parameters) raised on the title screen and produced a stack dump
     -- every time the menu was opened.
-    local w, h = 560.0, 700.0
+    -- Window geometry. The DPI-scaled viewport is what matters, and Slate
+    -- units are what the canvas takes, so `viewport` already returns the
+    -- right space. Height is clamped to the screen: the list is long and it
+    -- is the ScrollBox's job to page through it.
+    local vw, vh = 1280.0, 800.0
     if M.env ~= nil and M.env.viewport ~= nil then
-        local _, vx, vy = guard.try("menu viewport size", M.env.viewport)
-        if type(vx) == "number" and vx > 0 and type(vy) == "number" and vy > 0 then
-            w = math.max(480.0, vx * 0.30)
-            h = math.max(560.0, vy * 0.82)
+        local _, x, y = guard.try("menu viewport size", M.env.viewport)
+        if type(x) == "number" and x > 0 and type(y) == "number" and y > 0 then
+            vw, vh = x, y
         end
     end
+    local w = math.max(460.0, math.min(vw * 0.34, 700.0))
+    local h = math.max(320.0, math.min(vh * 0.80, vh - 100.0))
 
     local sizeBox = make("/Script/UMG.SizeBox")
     if sizeBox == nil then return false end
     guard.get(function() sizeBox:SetWidthOverride(w) end)
     guard.get(function() sizeBox:SetHeightOverride(h) end)
     local cslot = guard.get(function() return canvas:AddChild(sizeBox) end)
-    guard.get(function() cslot:SetAutoSize(true) end)
-    guard.get(function() cslot:SetPosition({ X = 40.0, Y = 60.0 }) end)
+    -- NOT SetAutoSize(true): that sizes the slot to the CONTENT, so the
+    -- SizeBox's height override was ignored, the ScrollBox was never given a
+    -- bounded height, and the window grew past the bottom of the screen with
+    -- nothing to scroll. Fixing the slot size is what makes it scroll.
+    guard.get(function() cslot:SetAutoSize(false) end)
+    guard.get(function() cslot:SetAlignment({ X = 0.0, Y = 0.0 }) end)
+    guard.get(function() cslot:SetSize({ X = w, Y = h }) end)
+    -- centred, so it fits at any resolution and any UI scale
+    guard.get(function()
+        cslot:SetPosition({ X = math.floor((vw - w) * 0.5),
+                            Y = math.floor((vh - h) * 0.5) })
+    end)
 
     local border = make("/Script/UMG.Border")
     if border ~= nil then
