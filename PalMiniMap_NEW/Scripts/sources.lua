@@ -206,18 +206,51 @@ M.STATIC_PAD = 15000
 -- ---------------------------------------------------------------
 local nearScratch = {}
 
+-- WHY THIS GUARD EXISTS - it is the 2.0.6 "no pals on the minimap" bug.
+--
+-- FindAllOf matches a class AND everything derived from it, so
+-- FindAllOf("PalCharacter") also returns the local player, other players
+-- and NPCs. 2.0.6 subtracted the PalPlayerCharacter and PalNPC scans from
+-- it to stop drawing those as pals. That is correct only if those classes
+-- are a strict SUBSET of PalCharacter - and on this game build PalNPC is
+-- not: wild pals derive from it too, so the subtraction removed every pal
+-- and the minimap showed none at all.
+--
+-- Rather than hard-code a hierarchy that a game update can change, a class
+-- is only trusted as an exclusion set if it comes back holding a small
+-- part of the pal list. One that holds most of it is a superclass, so it
+-- is neither subtracted from the pals nor drawn as its own kind of marker
+-- (drawing it would just duplicate every pal under a generic icon). It
+-- says so in the log, once.
+local EXCLUSION_MAX_SHARE = 0.6
+local rejectedClass = {}
+
+local function usableForExclusion(class, count, palCount)
+    if count == 0 or palCount < 8 then return true end
+    if count <= palCount * EXCLUSION_MAX_SHARE then return true end
+    if not rejectedClass[class] then
+        rejectedClass[class] = true
+        guard.log(string.format(
+            "'%s' matched %d of %d PalCharacters - on this build it is a superclass of "
+            .. "pals, not a separate kind of actor, so it is ignored", class, count, palCount))
+    end
+    return false
+end
+
+local reportedScan = false
+
 function M.scanDynamic(cfg, px, py, zoom, playerPawn)
     local maxD2 = keepRadius2(zoom)
 
     S.pals, S.players, S.npcs = {}, {}, {}
 
-    -- PalPlayerCharacter and PalNPC both derive from PalCharacter, so a
-    -- plain FindAllOf("PalCharacter") returns the local player, every
-    -- other player and every human NPC as well. 2.0.5 drew all of them as
-    -- pals - which is the duplicate marker sitting permanently under the
-    -- player arrow - so they are collected first and then excluded by
-    -- name (actor names are unique within a level, and identity comparison
-    -- on reflected UObjects is not reliable across calls).
+    -- the raw list comes first: the exclusion guard above needs its size
+    local rawPals = cfg.showPals and findAll("PalCharacter", "pals") or EMPTY
+    local palCount = #rawPals
+
+    -- Excluded by actor NAME: names are unique within a level, and
+    -- identity comparison on reflected UObjects is not reliable across
+    -- calls.
     local excluded = nil
     local function exclude(actor)
         local n = actorName(actor)
@@ -232,34 +265,41 @@ function M.scanDynamic(cfg, px, py, zoom, playerPawn)
     -- not also come back as an "other player": 2.0.5 stacked a second
     -- icon underneath the arrow, permanently.
     local selfName = playerPawn ~= nil and exclude(playerPawn) or nil
+    local nPlayers, nNpcs = 0, 0
 
     if cfg.showPlayers or cfg.showPals then
         local all = findAll("PalPlayerCharacter", "players")
-        for i = 1, #all do
-            local a = all[i]
-            local n = exclude(a)
-            if cfg.showPlayers and n ~= selfName then
-                S.players[#S.players + 1] = a
+        if usableForExclusion("PalPlayerCharacter", #all, palCount) then
+            nPlayers = #all
+            for i = 1, #all do
+                local a = all[i]
+                local n = exclude(a)
+                if cfg.showPlayers and n ~= selfName then
+                    S.players[#S.players + 1] = a
+                end
             end
         end
     end
 
     if cfg.showNPCs or cfg.showPals then
         local all = findAll("PalNPC", "NPC humans")
-        for i = 1, #all do
-            local a = all[i]
-            exclude(a)
-            if cfg.showNPCs then
-                local x, y = actorLocation(a)
-                if x ~= nil and dist2(x, y, px, py) <= maxD2 then
-                    S.npcs[#S.npcs + 1] = a
+        if usableForExclusion("PalNPC", #all, palCount) then
+            nNpcs = #all
+            for i = 1, #all do
+                local a = all[i]
+                exclude(a)
+                if cfg.showNPCs then
+                    local x, y = actorLocation(a)
+                    if x ~= nil and dist2(x, y, px, py) <= maxD2 then
+                        S.npcs[#S.npcs + 1] = a
+                    end
                 end
             end
         end
     end
 
     if cfg.showPals then
-        local all = findAll("PalCharacter", "pals")
+        local all = rawPals
         local near, n = nearScratch, 0
         for i = 1, #all do
             local a = all[i]
@@ -276,6 +316,14 @@ function M.scanDynamic(cfg, px, py, zoom, playerPawn)
                     end
                 end
             end
+        end
+        -- one line, once: enough to tell "no pals nearby" from "the filter
+        -- ate them", which is the question this whole guard exists for
+        if not reportedScan and palCount > 0 then
+            reportedScan = true
+            guard.log(string.format(
+                "pal scan: %d PalCharacters, %d players and %d NPCs excluded, %d within range",
+                palCount, nPlayers, nNpcs, n))
         end
         -- table.sort only sees the live prefix
         for i = #near, n + 1, -1 do near[i] = nil end

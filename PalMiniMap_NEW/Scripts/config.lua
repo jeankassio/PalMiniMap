@@ -60,6 +60,9 @@ local DEFAULTS = {
 
     -- hide while the game's own Esc menu is up
     hideBehindGameUi   = true,
+    -- debug: list the widget classes in the viewport on every maintenance
+    -- tick, so the Esc menu's real class name can be read off the log
+    logGameUiWidgets   = false,
 
     autohideInBase     = false,   -- 1.x: "autohide minimap while in base camps"
     baseCampRadius     = 12000,   -- how close counts as "inside a base camp"

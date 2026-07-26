@@ -323,40 +323,88 @@ end
 
 -- True while the game is showing its own pause/system menu.
 --
--- 2.0.2 inferred this from pc.bShowMouseCursor, which Palworld leaves ON
--- during ordinary gameplay, so the minimap was hidden permanently.
--- WBP_InGameMainMenu is the Esc menu; asking whether it is in the
--- viewport is exact rather than a guess.
+-- HISTORY, because two attempts at this have already gone wrong. 2.0.2
+-- inferred it from pc.bShowMouseCursor, which Palworld leaves ON during
+-- ordinary gameplay, so the minimap was hidden permanently. 2.0.4
+-- replaced that with "is WBP_InGameMainMenu_C in the viewport" - but that
+-- class name was a guess, and it does not fire.
 --
--- FindAllOf walks the whole UObject array. While the widget has never
--- been found the search is retried on a 10 s back-off instead of every
--- maintenance tick - the Esc menu is created the first time it is opened
--- and then lives forever, so there is nothing to gain from looking more
--- often, and a lot to lose.
+-- The primary signal is now UGameplayStatics::IsGamePaused, which is not
+-- a guess about asset names at all: opening the Esc menu (and the map and
+-- inventory screens) pauses a solo game, and the call is one cached
+-- reflection hop, cheap enough for the movement tick.
+--
+-- The widget test is kept as a second opinion, because a co-op session
+-- does not pause. It is searched for on every maintenance tick while it
+-- has never been found - a menu widget that only exists while the menu is
+-- open would be missed entirely by a long back-off - and the search stops
+-- once found or after a couple of minutes of never finding it.
 local GAME_MENU_CLASS = "WBP_InGameMainMenu_C"
-local GAME_MENU_RETRY = 10.0
+local GAME_MENU_TRIES = 60
+local GAME_MENU_SLOW  = 30.0
 local gameMenuWidget = nil
+local gameMenuTries = 0
 local gameMenuRetryAt = 0.0
 
 local function refreshGameMenuWidget()
     if not cfg.hideBehindGameUi then return end
     if guard.alive(gameMenuWidget) then return end
     gameMenuWidget = nil
-    local now = os.clock()
-    if now < gameMenuRetryAt then return end
-    gameMenuRetryAt = now + GAME_MENU_RETRY
+    if gameMenuTries >= GAME_MENU_TRIES then
+        local now = os.clock()
+        if now < gameMenuRetryAt then return end
+        gameMenuRetryAt = now + GAME_MENU_SLOW
+    end
+    gameMenuTries = gameMenuTries + 1
     local found = guard.get(FindAllOf, GAME_MENU_CLASS)
     if type(found) ~= "table" then return end
     for i = 1, #found do
-        if guard.alive(found[i]) then gameMenuWidget = found[i]; return end
+        if guard.alive(found[i]) then
+            gameMenuWidget = found[i]
+            guard.log("found the game's menu widget (" .. GAME_MENU_CLASS .. ")")
+            return
+        end
     end
+end
+
+local function gamePaused()
+    local gs = statics()
+    local pc = playerController()
+    if gs == nil or pc == nil then return false end
+    return guard.get(function() return gs:IsGamePaused(pc) end) == true
 end
 
 local function gameUiOpen()
     if not cfg.hideBehindGameUi then return false end
     if menu.isOpen() then return false end   -- our own window may stay up
+    if gamePaused() then return true end
     if not guard.alive(gameMenuWidget) then return false end
     return guard.get(function() return gameMenuWidget:IsInViewport() end) == true
+end
+
+-- Diagnostic for exactly the problem above: with this on, every
+-- maintenance tick lists the widget classes currently in the viewport, so
+-- opening the Esc menu once tells us what it is really called instead of
+-- guessing. Off by default - it walks the whole UObject array and asks
+-- every widget for its class name.
+local function logViewportWidgets()
+    if not cfg.logGameUiWidgets then return end
+    local found = guard.get(FindAllOf, "UserWidget")
+    if type(found) ~= "table" then return end
+    local names, seen = {}, {}
+    for i = 1, #found do
+        local w = found[i]
+        if guard.alive(w)
+           and guard.get(function() return w:IsInViewport() end) == true then
+            local c = guard.get(function() return w:GetClass():GetFName():ToString() end)
+            c = c and tostring(c) or nil
+            if c ~= nil and not seen[c] then
+                seen[c] = true
+                names[#names + 1] = c
+            end
+        end
+    end
+    guard.log("widgets in viewport (" .. #names .. "): " .. table.concat(names, ", "))
 end
 
 local function ensureWidget()
@@ -468,6 +516,7 @@ local function maintenanceTick()
 
     watchTeleport(frameState)
     refreshGameMenuWidget()
+    logViewportWidgets()
     ensureWidget()
     worldmap.calibrate()
 end
@@ -822,4 +871,4 @@ guard.register("pump loop", function()
     LoopAsync(PUMP_MS, guard.loopBody("pump", pump, anythingDue))
 end)
 
-guard.log("PalMiniMap 2.0.7 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
+guard.log("PalMiniMap 2.0.8 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")

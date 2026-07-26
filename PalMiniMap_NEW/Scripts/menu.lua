@@ -116,6 +116,9 @@ local LAYOUT = {
     { key = "scanIntervalMs",    label = "Rescan world every (ms)",  kind = "int", min = 1000, max = 20000, step = 500 },
     { key = "maxPoiIcons",       label = "Max point-of-interest icons", kind = "int", min = 8, max = 128 },
 
+    { header = "Troubleshooting" },
+    { key = "logGameUiWidgets",  label = "Log game UI widget names",  kind = "bool" },
+
     { header = "Map orientation (only if the map looks wrong)" },
     { key = "axis.swapXY",       label = "Swap X / Y",               kind = "bool" },
     { key = "axis.flipH",        label = "Mirror horizontally",      kind = "bool" },

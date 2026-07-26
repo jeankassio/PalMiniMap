@@ -135,6 +135,41 @@ axis orientation (north up) is right — the constants decoded from
 `DT_WorldMapUIData` are good, so the orientation controls are only an escape
 hatch.
 
+**Fixed in 2.0.8 — no pals on the minimap, and hiding behind the Esc menu:**
+
+- **No pal icons at all, even with "Show pals" on — a 2.0.6 regression.**
+  `FindAllOf` matches a class *and everything derived from it*, so
+  `FindAllOf("PalCharacter")` also returns the local player, other players and
+  NPCs. 2.0.6 subtracted the `PalPlayerCharacter` and `PalNPC` scans from it to
+  stop drawing those as pals. That is only correct if those classes are a strict
+  **subset** of `PalCharacter` — and on this game build `PalNPC` is not: wild
+  pals derive from it too, so the subtraction removed **every pal**.
+  Rather than hard-code a class hierarchy that a game update can change, a class
+  is now only trusted as an exclusion set if it comes back holding a small part
+  of the pal list. One that holds most of it is a superclass, so it is neither
+  subtracted from the pals nor drawn as its own marker kind (drawing it would
+  duplicate every pal under a generic icon). It says so in the log, once:
+  `'PalNPC' matched 202 of 203 PalCharacters - on this build it is a superclass
+  of pals, not a separate kind of actor, so it is ignored`.
+  A one-line scan summary is logged too, so "no pals nearby" can be told apart
+  from "the filter ate them" without guessing.
+- **The minimap now really hides behind the Esc menu.** Two earlier attempts at
+  this went wrong: 2.0.2 inferred it from `pc.bShowMouseCursor`, which Palworld
+  leaves ON during ordinary gameplay (so the minimap was hidden permanently), and
+  2.0.4 replaced that with "is `WBP_InGameMainMenu_C` in the viewport" — but that
+  class name was a **guess**, and it does not fire. The primary signal is now
+  `UGameplayStatics::IsGamePaused`, which is not a guess about asset names at all:
+  opening the Esc menu (and the map and inventory screens) pauses a solo game, and
+  the call is one cached reflection hop. The widget test is kept as a second
+  opinion for co-op, where the game does not pause, and it is searched for on
+  every maintenance tick while it has never been found — a 2.0.6 back-off of 10 s
+  could miss a widget that only exists while the menu is open.
+- **A diagnostic instead of another guess:** F5 → *Troubleshooting* → "Log game UI
+  widget names" lists the widget classes currently in the viewport on every
+  maintenance tick. Turn it on, open the Esc menu once, and the log says what that
+  screen is actually called — which is how the widget fallback gets a real class
+  name rather than a third guess. Off by default; it walks the whole object array.
+
 **New in 2.0.7 — a genuinely circular minimap and a terrain quality control:**
 
 - **"Circular shape" now changes the SHAPE.** 2.0.5/2.0.6 drew a round decal on
