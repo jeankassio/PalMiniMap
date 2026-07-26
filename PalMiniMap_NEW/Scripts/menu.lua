@@ -19,6 +19,22 @@ local guard = require("guard")
 
 local M = {}
 
+-- Set by main.lua: { controller = fn, viewport = fn, isGameWorld = fn }.
+-- Accessors, never cached objects -- see the note on applyInputMode.
+M.env = nil
+
+local function controller()
+    if M.env == nil or M.env.controller == nil then return nil end
+    local pc = guard.get(M.env.controller)
+    if guard.alive(pc) then return pc end
+    return nil
+end
+
+local function inGameWorld()
+    if M.env == nil or M.env.isGameWorld == nil then return false end
+    return guard.get(M.env.isGameWorld) == true
+end
+
 local VIS_SHOW, VIS_HIDE = 0, 1     -- ESlateVisibility Visible / Collapsed
 local SLIDER_COMMIT_DELAY = 0.4
 
@@ -27,7 +43,6 @@ local S = {
     controls = {},
     open = false,
     world = "",
-    pc = nil,
     -- NOT 0: the debounce compares against os.clock(), which is small right
     -- after the process starts, so a 0 here silently swallows the very first
     -- key press. Start far enough back that the first press always counts.
@@ -188,6 +203,14 @@ end
 -- ---------------------------------------------------------------
 local function applyInputMode(pc, widget)
     if pc == nil or not guard.alive(pc) then return end
+    -- NEVER on the splash/login/title screens. Those PlayerControllers are
+    -- short-lived and are destroyed as the title flow advances; 2.0.2 held
+    -- one and kept calling SetInputMode on it four times a second, which
+    -- crashed the game a few seconds after opening the menu there. Those
+    -- screens already have a working cursor of their own, so there is
+    -- nothing to force anyway. 1.x had this exact guard; dropping it in
+    -- the rewrite is what reintroduced the bug.
+    if not inGameWorld() then return end
     local wbl = cls("/Script/UMG.Default__WidgetBlueprintLibrary")
     if wbl ~= nil and widget ~= nil then
         local ok = guard.get(function()
@@ -203,6 +226,7 @@ end
 
 local function releaseInputMode(pc)
     if pc == nil or not guard.alive(pc) then return end
+    if not inGameWorld() then return end
     local wbl = cls("/Script/UMG.Default__WidgetBlueprintLibrary")
     if wbl ~= nil then
         guard.get(function() wbl:SetInputMode_GameOnly(pc) end)
@@ -290,13 +314,17 @@ function M.build(pc, cfg)
     if canvas == nil then return false end
     guard.get(function() S.tree.RootWidget = canvas end)
 
+    -- Viewport size comes from main.lua, which reads it through
+    -- UWidgetLayoutLibrary. Calling pc:GetViewportSize() here (two OUT
+    -- parameters) raised on the title screen and produced a stack dump
+    -- every time the menu was opened.
     local w, h = 560.0, 700.0
-    local ok, vx, vy = guard.try("menu viewport size", function()
-        return pc:GetViewportSize()
-    end)
-    if ok and type(vx) == "number" and vx > 0 then
-        w = math.max(480.0, vx * 0.30)
-        h = math.max(560.0, vy * 0.82)
+    if M.env ~= nil and M.env.viewport ~= nil then
+        local _, vx, vy = guard.try("menu viewport size", M.env.viewport)
+        if type(vx) == "number" and vx > 0 and type(vy) == "number" and vy > 0 then
+            w = math.max(480.0, vx * 0.30)
+            h = math.max(560.0, vy * 0.82)
+        end
     end
 
     local sizeBox = make("/Script/UMG.SizeBox")
@@ -359,7 +387,6 @@ local function drop()
     S.widget, S.tree = nil, nil
     S.controls = {}
     S.open = false
-    S.pc = nil
 end
 
 function M.isOpen() return S.open end
@@ -368,20 +395,21 @@ function M.usable()
     return S.open and S.widget ~= nil and guard.alive(S.widget)
 end
 
-function M.close(pc)
+function M.close()
     if not S.open then return end
     if M.onCommit then guard.try("menu flush", function() M.flush() end) end
     if S.widget ~= nil and guard.alive(S.widget) then
         guard.get(function() S.widget:RemoveFromParent() end)
     end
-    releaseInputMode(pc or S.pc)
+    releaseInputMode(controller())
     drop()
     guard.log("menu closed")
 end
 
-function M.open(pc, cfg, worldName)
+function M.open(cfg, worldName)
     if S.open then return end
-    if pc == nil or not guard.alive(pc) then
+    local pc = controller()
+    if pc == nil then
         guard.log("menu not opened: no player controller")
         return
     end
@@ -401,16 +429,16 @@ function M.open(pc, cfg, worldName)
         return
     end
     S.open = true
-    S.pc = pc
     S.world = worldName or ""
-    guard.log("menu opened")
+    guard.log("menu opened" .. (inGameWorld() and "" or
+        " (menu screen: the game's own cursor is used, input mode untouched)"))
 end
 
-function M.toggle(pc, cfg, worldName)
+function M.toggle(cfg, worldName)
     if (os.clock() - S.lastToggle) < 0.3 then return end
     S.lastToggle = os.clock()
     if S.open and not M.usable() then drop() end
-    if S.open then M.close(pc) else M.open(pc, cfg, worldName) end
+    if S.open then M.close() else M.open(cfg, worldName) end
 end
 
 function M.worldChanged(worldName)
@@ -460,12 +488,12 @@ function M.poll(cfg)
     M.cfg = cfg
     if not S.open then return end
     if not M.usable() then
-        releaseInputMode(S.pc)
+        releaseInputMode(controller())
         drop()
         return
     end
     -- keep the cursor alive; the game puts it back every frame otherwise
-    applyInputMode(S.pc, S.widget)
+    applyInputMode(controller(), S.widget)
     local now = os.clock()
     local pending = {}
     for _, c in ipairs(S.controls) do

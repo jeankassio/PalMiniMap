@@ -34,13 +34,17 @@ end
 local REPEAT_SECONDS = 60
 local state = {}
 
+-- `err` arrives ALREADY passed through describe(), because that is the
+-- xpcall message handler. Calling describe again here tracebacked the
+-- traceback: one failure printed several nested stack dumps, which is
+-- expensive and is what made the game hitch before it died.
 local function report(label, err)
     label = tostring(label)
     local now = os.clock()
     local st = state[label]
     if st == nil then
         state[label] = { count = 1, lastLogged = now }
-        M.log("ERROR in " .. label .. " (handled, continuing): " .. describe(err))
+        M.log("ERROR in " .. label .. " (handled, continuing): " .. tostring(err))
         return
     end
     st.count = st.count + 1

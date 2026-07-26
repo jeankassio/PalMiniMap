@@ -403,8 +403,21 @@ menu.onCommit = function(keys)
     config.save()
 end
 
+-- The menu gets accessors, never cached objects. Holding a title-screen
+-- PlayerController across polls is what crashed 2.0.2: that controller is
+-- destroyed as the title flow advances, and the next SetInputMode call
+-- landed on freed memory (access violation reading 0xffff...ffff, which
+-- no pcall can catch).
+menu.env = {
+    controller  = playerController,
+    viewport    = viewportSize,
+    isGameWorld = function()
+        return worldName ~= "" and not NON_GAME_WORLDS[worldName]
+    end,
+}
+
 local function toggleMenu()
-    menu.toggle(playerController(), cfg, worldName)
+    menu.toggle(cfg, worldName)
 end
 
 -- ---------------------------------------------------------------
@@ -432,10 +445,13 @@ if type(Key) == "table" then
     bind("toggle minimap (F3)", Key.F3, toggleVisible)
     bind("cycle corner (F2)", Key.F2, cycleCorner)
     bind("edit mode (F4)", Key.F4, toggleEditMode)
-    bind("edit move left",  Key.LEFT,  function() nudge(-10, 0) end)
-    bind("edit move right", Key.RIGHT, function() nudge(10, 0) end)
-    bind("edit move up",    Key.UP,    function() nudge(0, -10) end)
-    bind("edit move down",  Key.DOWN,  function() nudge(0, 10) end)
+    -- UE4SS names the arrows *_ARROW; plain LEFT/RIGHT/UP/DOWN do not
+    -- exist, so 2.0.2 failed to bind all four (the log said so on every
+    -- launch) and edit mode could never be moved.
+    bind("edit move left",  Key.LEFT_ARROW,  function() nudge(-10, 0) end)
+    bind("edit move right", Key.RIGHT_ARROW, function() nudge(10, 0) end)
+    bind("edit move up",    Key.UP_ARROW,    function() nudge(0, -10) end)
+    bind("edit move down",  Key.DOWN_ARROW,  function() nudge(0, 10) end)
     bind("zoom in (+)", Key.ADD, function() zoomBy(-cfg.zoomStep) end)
     bind("zoom in (=)", Key.OEM_PLUS, function() zoomBy(-cfg.zoomStep) end)
     bind("zoom out (-)", Key.SUBTRACT, function() zoomBy(cfg.zoomStep) end)
@@ -479,4 +495,4 @@ guard.register("menu poll loop", function()
         function() return menu.isOpen() end))
 end)
 
-guard.log("PalMiniMap 2.0.2 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
+guard.log("PalMiniMap 2.0.3 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")

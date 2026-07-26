@@ -135,6 +135,30 @@ axis orientation (north up) is right — the constants decoded from
 `DT_WorldMapUIData` are good, so the orientation controls are only an escape
 hatch.
 
+**Fixed in 2.0.3 — crash when opening the menu on the title screen:**
+
+- **Root cause.** The menu cached the `PlayerController` and re-asserted the
+  input mode on it four times a second. On the title screen that controller is
+  short-lived and is destroyed as the title flow advances, so the next
+  `SetInputMode` call landed on freed memory —
+  `EXCEPTION_ACCESS_VIOLATION reading 0xffffffffffffffff`, which no `pcall` can
+  catch. 1.x had an explicit guard against touching input mode on the
+  splash/login/title worlds; the rewrite dropped it. It is back, and the menu
+  now resolves the controller fresh on every use instead of holding one.
+  Those screens already have a working cursor, so nothing is lost.
+- **The stall before the crash.** `guard` used `describe()` as the `xpcall`
+  message handler *and* called it again when reporting, so one failure printed
+  several nested stack dumps. A single error was writing a few kilobytes of
+  traceback.
+- **The failure that triggered it:** `menu.build` still called
+  `pc:GetViewportSize()` (two OUT parameters) — the 2.0.2 fix was applied to
+  `main.lua` only. It raised on every menu open at the title screen. The menu
+  now takes the size from `main.lua`'s `UWidgetLayoutLibrary` reader.
+- **Edit-mode arrows never worked.** UE4SS names the arrow keys `LEFT_ARROW`,
+  `RIGHT_ARROW`, `UP_ARROW`, `DOWN_ARROW`; 2.0.2 used `LEFT`/`RIGHT`/`UP`/`DOWN`,
+  which do not exist, so all four binds failed at startup. The log said so on
+  every launch — worth reading when something seems inert.
+
 **Fixed in 2.0.2:**
 
 - the minimap drew on top of the game's own menus. It now hides whenever the
