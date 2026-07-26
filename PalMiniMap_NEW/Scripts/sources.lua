@@ -1,83 +1,92 @@
 -- =====================================================================
 -- sources.lua - what to draw
 --
--- HOW A PAL'S SPECIES IS IDENTIFIED (taken from the original blueprint's
--- own bytecode, not guessed): every pal actor is named
---     BP_<Tribe>_C_<uniqueId>          e.g. "BP_Anubis_C_2147481234"
--- The blueprint split that on "BP_" and then on "_C_": the LEFT part is
--- the tribe ("Anubis"), which is exactly the row key of the icon data
--- table, and the RIGHT part is the per-instance id it used for dedupe.
--- The tribe maps straight onto the game's own icon texture:
+-- THE CLASS LIST IS NOT GUESSWORK. Every class below was taken from the
+-- import table of the original Paldar blueprint - i.e. these are exactly
+-- the classes the 1.x mod scanned, so they are known to be the right ones
+-- on this game build. Scanning the generic "PalMapObject" instead (2.0.0)
+-- pulled in every wall and foundation of the player's base, which is the
+-- ring of stray markers in the 2.0.0 screenshot.
+--
+-- HOW A PAL'S SPECIES IS IDENTIFIED, also from that blueprint's bytecode:
+-- pal actors are named  BP_<Tribe>_C_<uniqueId>  ("BP_Anubis_C_2147481234").
+-- Split on "BP_" then on "_C_" and the left part is the tribe, which is
+-- both the icon table's row key and the texture name:
 --     /Game/Pal/Texture/PalIcon/Normal/T_<Tribe>_icon_normal
--- which is how 137 species icons come for free with nothing shipped.
+-- That is how 137 species icons come for free with nothing shipped.
 --
--- Map objects are classified the same way - by name - because the actors
--- are blueprints, not the C++ *Model classes. Anything unclassified is
--- SKIPPED rather than drawn: scanning PalMapObject blindly was pulling in
--- every wall and foundation of the player's base (the ring of brackets in
--- the 2.0.0 screenshot). Unknown names are sampled into the log once so
--- the table below can be extended from evidence.
---
--- The exposure split that keeps this crash-safe is unchanged: static
--- marks keep plain numbers and never touch their actor again; dynamic
--- marks re-read the actor, but only ever validate-then-GetActorLocation
--- on the actor itself - never a walk to an attach parent or owner, which
--- is where both 1.x crashes happened.
+-- CRASH SAFETY, unchanged from 2.0.0: static marks (everything that does
+-- not move) have their coordinates read ONCE at scan time and are then
+-- plain numbers - their actor is never touched again. Only pals, players
+-- and NPCs are re-read per frame, and that read is validate-then-
+-- GetActorLocation on the actor itself, never a walk to an attach parent
+-- or owner, which is where both 1.x crashes actually happened.
 -- =====================================================================
 
 local guard = require("guard")
 
 local M = {}
 
+local UI_IN  = "/Game/Pal/Texture/UI/InGame/"
 local PAL_ICON_FMT = "/Game/Pal/Texture/PalIcon/Normal/T_%s_icon_normal.T_%s_icon_normal"
 
+local function ui(name) return UI_IN .. name .. "." .. name end
+
 local ICON = {
-    player = "/Game/Pal/Texture/UI/InGame/T_icon_map_player.T_icon_map_player",
-    member = "/Game/Pal/Texture/UI/InGame/T_icon_map_member.T_icon_map_member",
-    death  = "/Game/Pal/Texture/UI/InGame/T_prt_map_death_1.T_prt_map_death_1",
-    poi    = "/Game/Pal/Texture/UI/InGame/T_prt_map_cursor.T_prt_map_cursor",
+    player  = ui("T_icon_map_player"),
+    member  = ui("T_icon_map_member"),
+    death   = ui("T_prt_map_death_1"),
+    chest   = ui("T_icon_compass_Search_Treasure"),
+    travel  = ui("T_icon_compass_Teleport"),
+    tower   = ui("T_icon_compass_tower"),
+    dungeon = ui("T_icon_compass_dungeon"),
+    camp    = ui("T_icon_compass_camp"),
+    enemy   = ui("T_icon_compass_EnemyCamp"),
+    egg     = ui("T_icon_compass_ClearCheck"),
+    note    = ui("T_icon_compass_ClearCheck"),
+    effigy  = ui("T_icon_compass_ClearCheck"),
+    fruit   = ui("T_icon_compass_ClearCheck"),
 }
 
-local WHITE   = { R = 1.00, G = 1.00, B = 1.00, A = 1.0 }
+local WHITE = { R = 1.00, G = 1.00, B = 1.00, A = 1.0 }
 local TINT = {
-    wild    = { R = 1.00, G = 1.00, B = 1.00, A = 1.0 },
     friend  = { R = 0.65, G = 1.00, B = 0.75, A = 1.0 },
-    shiny   = { R = 1.00, G = 0.90, B = 0.35, A = 1.0 },
-    player  = { R = 0.40, G = 0.75, B = 1.00, A = 1.0 },
-    chest   = { R = 1.00, G = 0.85, B = 0.35, A = 1.0 },
-    travel  = { R = 0.55, G = 0.85, B = 1.00, A = 1.0 },
-    dungeon = { R = 1.00, G = 0.45, B = 0.45, A = 1.0 },
-    camp    = { R = 0.80, G = 0.65, B = 1.00, A = 1.0 },
+    shiny   = { R = 1.00, G = 0.88, B = 0.30, A = 1.0 },
+    player  = { R = 0.45, G = 0.78, B = 1.00, A = 1.0 },
+    npc     = { R = 0.95, G = 0.85, B = 0.65, A = 1.0 },
+    egg     = { R = 1.00, G = 0.95, B = 0.75, A = 1.0 },
+    note    = { R = 0.80, G = 0.90, B = 1.00, A = 1.0 },
+    effigy  = { R = 0.70, G = 1.00, B = 0.80, A = 1.0 },
+    fruit   = { R = 1.00, G = 0.70, B = 0.85, A = 1.0 },
 }
 
--- name fragment -> category. Checked in order, first hit wins.
-local POI_RULES = {
-    { match = "FastTravel",  kind = "travel",  cfg = "showFastTravel" },
-    { match = "TreasureBox", kind = "chest",   cfg = "showChests"     },
-    { match = "ItemChest",   kind = "chest",   cfg = "showChests"     },
-    { match = "DungeonEnt",  kind = "dungeon", cfg = "showDungeons"   },
-    { match = "Dungeon",     kind = "dungeon", cfg = "showDungeons"   },
-    { match = "BaseCamp",    kind = "camp",    cfg = "showBaseCamps"  },
-}
-
-local CANDIDATES = {
-    pal    = { "PalCharacter" },
-    player = { "PalPlayerCharacter" },
-    mapobj = { "PalMapObject" },
+-- Static world objects. `collectible` marks the ones that can be picked
+-- up: chests and eggs simply despawn, notes and effigies stay in the
+-- world with a "already taken" flag, exactly as in 1.x.
+local STATIC_KINDS = {
+    { cfg = "showChests",     class = "PalMapObjectTreasureBox",                kind = "chest",   collectible = true  },
+    { cfg = "showEggs",       class = "PalMapObjectPalEgg",                     kind = "egg",     collectible = true  },
+    { cfg = "showNotes",      class = "PalLevelObjectNote",                     kind = "note",    collectible = true  },
+    { cfg = "showEffigies",   class = "PalLevelObjectRelic",                    kind = "effigy",  collectible = true  },
+    { cfg = "showSkillFruit", class = "PalMapObjectSpawnerMultiItem",           kind = "fruit"    },
+    { cfg = "showFastTravel", class = "PalLevelObjectUnlockableFastTravelPoint", kind = "travel"  },
+    { cfg = "showDungeons",   class = "BP_DungeonEntrance_Base_C",              kind = "dungeon"  },
+    { cfg = "showBaseCamps",  class = "PalBuildObjectBaseCampPoint",            kind = "camp"     },
+    { cfg = "showEnemyCamps", class = "PalNPCCampSpawnerBase",                  kind = "enemy"    },
+    { cfg = "showTowers",     class = "PalBossTower",                           kind = "tower"    },
+    { cfg = "showDeaths",     class = "BP_MapObject_DeathPenaltyChest_C",       kind = "death"    },
 }
 
 local S = {
-    pals = {},        -- { actor=, tribe=, shiny=, friend= }
-    players = {},
-    static = {},      -- { x, y, kind } - plain numbers only
+    pals = {}, players = {}, npcs = {},
+    static = {},
     lastScan = 0.0,
     reported = {},
-    unknownPoi = {},  -- name -> count, sampled for the log
-    unknownLogged = false,
+    campNear = false,
 }
 
 -- ---------------------------------------------------------------
--- helpers
+-- reflection helpers
 -- ---------------------------------------------------------------
 local function actorLocation(actor)
     if not guard.alive(actor) then return nil end
@@ -93,14 +102,11 @@ M.actorLocation = actorLocation
 local function actorName(actor)
     local n = guard.get(function() return actor:GetFName():ToString() end)
     if type(n) == "string" and n ~= "" then return n end
-    n = guard.get(function() return actor:GetFullName() end)
-    if type(n) == "string" then return n end
     return nil
 end
 
--- "BP_Anubis_C_2147481234" -> "Anubis". Also copes with names that carry
--- no BP_ prefix, and with variants like "BP_Anubis_Ice_C_12" (tribe keeps
--- its suffix, which is correct: the icon table has those rows too).
+-- "BP_Anubis_C_2147481234" -> "Anubis"; keeps variant suffixes such as
+-- "FlameBuffalo_Ice", which are their own rows in the icon table.
 local function tribeOf(name)
     if type(name) ~= "string" then return nil end
     local body = name:match("^BP_(.+)$") or name
@@ -115,34 +121,45 @@ local function isShiny(actor)
     if comp == nil then return false end
     local ind = guard.get(function() return comp.IndividualParameter end)
     if ind == nil then return false end
-    local rare = guard.get(function() return ind:IsRarePal() end)
-    return rare == true
+    return guard.get(function() return ind:IsRarePal() end) == true
 end
 
 local function isFriend(actor, playerChar)
     if playerChar == nil then return false end
-    local f = guard.get(function() return actor:IsFriend(playerChar) end)
-    return f == true
+    return guard.get(function() return actor:IsFriend(playerChar) end) == true
 end
 
-local function findAll(category)
-    local names = CANDIDATES[category]
-    if names == nil then return {} end
-    for _, name in ipairs(names) do
-        local found = guard.get(FindAllOf, name)
-        if type(found) == "table" and #found > 0 then
-            if not S.reported[category] then
-                S.reported[category] = true
-                guard.log(string.format("scan: '%s' matched class '%s' (%d objects)",
-                                        category, name, #found))
-            end
-            return found
+-- Reflected booleans can arrive wrapped on some UE4SS builds; `== true`
+-- on the wrapper would read every collected item as still available.
+local function asBool(v)
+    if type(v) == "boolean" then return v end
+    if type(v) == "number" then return v ~= 0 end
+    if v == nil then return nil end
+    local inner = guard.get(function() return v:get() end)
+    if type(inner) == "boolean" then return inner end
+    if type(inner) == "number" then return inner ~= 0 end
+    return nil
+end
+
+-- Only meaningful for notes and effigies: those stay in the world after
+-- being taken, with the flag set. Chests and eggs just despawn, so they
+-- disappear on their own at the next scan.
+local function alreadyCollected(actor)
+    return asBool(guard.get(function() return actor.bPickedInClient end)) == true
+end
+
+local function findAll(class, label)
+    local found = guard.get(FindAllOf, class)
+    if type(found) == "table" and #found > 0 then
+        if not S.reported[class] then
+            S.reported[class] = true
+            guard.log(string.format("scan: %s -> '%s' (%d)", label, class, #found))
         end
+        return found
     end
-    if not S.reported[category] then
-        S.reported[category] = true
-        guard.log(string.format("scan: nothing matched for '%s' (tried %s)",
-                                category, table.concat(names, ", ")))
+    if not S.reported[class] then
+        S.reported[class] = true
+        guard.log(string.format("scan: %s -> '%s' found nothing", label, class))
     end
     return {}
 end
@@ -152,50 +169,18 @@ local function dist2(ax, ay, bx, by)
     return dx * dx + dy * dy
 end
 
-local function classifyPoi(name)
-    if type(name) ~= "string" then return nil end
-    for _, rule in ipairs(POI_RULES) do
-        if name:find(rule.match, 1, true) then return rule end
-    end
-    return nil
-end
-
--- Log a sample of what did NOT classify, once, so the rules above can be
--- extended from real data instead of speculation.
-local function noteUnknown(name)
-    if S.unknownLogged or name == nil then return end
-    local key = name:gsub("_C_%d+$", ""):gsub("_%d+$", "")
-    S.unknownPoi[key] = (S.unknownPoi[key] or 0) + 1
-end
-
-local function flushUnknown()
-    if S.unknownLogged then return end
-    local list = {}
-    for k, v in pairs(S.unknownPoi) do list[#list + 1] = { k = k, v = v } end
-    if #list == 0 then return end
-    table.sort(list, function(a, b) return a.v > b.v end)
-    local parts = {}
-    for i = 1, math.min(#list, 12) do
-        parts[#parts + 1] = string.format("%s x%d", list[i].k, list[i].v)
-    end
-    S.unknownLogged = true
-    guard.log("map objects not shown (unclassified, most common first): "
-              .. table.concat(parts, ", "))
-end
-
 -- ---------------------------------------------------------------
 -- scan
 -- ---------------------------------------------------------------
 function M.scan(cfg, px, py, playerChar)
-    local radius = cfg.zoom * 0.75
+    local radius = math.max(cfg.zoom, cfg.megazoom) * 0.75
     local maxD2 = radius * radius
 
-    S.pals = {}
-    S.players = {}
-    S.static = {}
+    S.pals, S.players, S.npcs, S.static = {}, {}, {}, {}
+    S.campNear = false
 
     if cfg.showPals then
-        local all = findAll("pal")
+        local all = findAll("PalCharacter", "pals")
         local near = {}
         for i = 1, #all do
             local a = all[i]
@@ -206,52 +191,63 @@ function M.scan(cfg, px, py, playerChar)
             end
         end
         table.sort(near, function(l, r) return l.d < r.d end)
-        local budget = cfg.maxPalIcons
         for i = 1, #near do
-            if #S.pals >= budget then break end
+            if #S.pals >= cfg.maxPalIcons then break end
             local a = near[i].actor
             local shiny = isShiny(a)
             if (not cfg.onlyShinyPals) or shiny then
                 S.pals[#S.pals + 1] = {
-                    actor  = a,
-                    tribe  = tribeOf(actorName(a)),
-                    shiny  = shiny,
-                    friend = isFriend(a, playerChar),
+                    actor = a, tribe = tribeOf(actorName(a)),
+                    shiny = shiny, friend = isFriend(a, playerChar),
                 }
             end
         end
     end
 
     if cfg.showPlayers then
-        local all = findAll("player")
+        local all = findAll("PalPlayerCharacter", "players")
         for i = 1, #all do S.players[#S.players + 1] = all[i] end
     end
 
-    local wantPoi = cfg.showChests or cfg.showFastTravel
-                    or cfg.showDungeons or cfg.showBaseCamps
-    if wantPoi then
-        local all = findAll("mapobj")
-        local budget = cfg.maxPoiIcons
+    if cfg.showNPCs then
+        local all = findAll("PalNPC", "NPC humans")
         for i = 1, #all do
-            if #S.static >= budget then break end
-            local a = all[i]
-            local name = actorName(a)
-            local rule = classifyPoi(name)
-            if rule == nil then
-                noteUnknown(name)
-            elseif cfg[rule.cfg] then
+            local x, y = actorLocation(all[i])
+            if x ~= nil and dist2(x, y, px, py) <= maxD2 then
+                S.npcs[#S.npcs + 1] = all[i]
+            end
+        end
+    end
+
+    local campRadius2 = cfg.baseCampRadius * cfg.baseCampRadius
+    for _, spec in ipairs(STATIC_KINDS) do
+        if cfg[spec.cfg] or spec.kind == "camp" then
+            local all = findAll(spec.class, spec.kind)
+            for i = 1, #all do
+                if #S.static >= cfg.maxPoiIcons then break end
+                local a = all[i]
                 local x, y = actorLocation(a)
-                if x ~= nil and dist2(x, y, px, py) <= maxD2 then
-                    S.static[#S.static + 1] = { x = x, y = y, kind = rule.kind }
+                if x ~= nil then
+                    local d = dist2(x, y, px, py)
+                    if spec.kind == "camp" and d <= campRadius2 then
+                        S.campNear = true   -- drives "autohide inside base camps"
+                    end
+                    if d <= maxD2 and cfg[spec.cfg] then
+                        local skip = cfg.hideCollected and spec.collectible
+                                     and alreadyCollected(a)
+                        if not skip then
+                            S.static[#S.static + 1] = { x = x, y = y, kind = spec.kind }
+                        end
+                    end
                 end
             end
         end
-        flushUnknown()
     end
 
     S.lastScan = os.clock()
 end
 
+function M.insideBaseCamp() return S.campNear end
 function M.lastScanAt() return S.lastScan end
 
 -- ---------------------------------------------------------------
@@ -264,7 +260,7 @@ function M.collect(cfg)
         local s = S.static[i]
         marks[#marks + 1] = {
             x = s.x, y = s.y,
-            texture = ICON.poi,
+            texture = ICON[s.kind] or ICON.member,
             size = cfg.iconSize,
             tint = TINT[s.kind] or WHITE,
         }
@@ -274,37 +270,37 @@ function M.collect(cfg)
         local p = S.pals[i]
         local x, y = actorLocation(p.actor)
         if x ~= nil then
-            local tex, tint = ICON.member, TINT.wild
+            local tex, tint = ICON.member, (p.friend and TINT.friend or WHITE)
             if p.tribe then
                 tex = string.format(PAL_ICON_FMT, p.tribe, p.tribe)
-                -- a species portrait is full colour already; tinting it
-                -- friend-green just muddies it. Only shiny gets a highlight,
-                -- and it also gets the size bump below.
+                -- a species portrait is already full colour; only shiny
+                -- gets a highlight (and the size bump below)
                 tint = p.shiny and TINT.shiny or WHITE
-            elseif p.friend then
-                tint = TINT.friend
+            elseif p.shiny then
+                tint = TINT.shiny
             end
             marks[#marks + 1] = {
-                x = x, y = y,
-                texture = tex,
-                fallback = ICON.member,
+                x = x, y = y, texture = tex, fallback = ICON.member,
                 size = p.shiny and (cfg.iconSize + 4) or cfg.iconSize,
                 tint = tint,
+                isPal = true,   -- lets megazoom drop pal icons (1.x option)
             }
         end
     end
 
-    if cfg.showPlayers then
-        for i = 1, #S.players do
-            local x, y = actorLocation(S.players[i])
-            if x ~= nil then
-                marks[#marks + 1] = {
-                    x = x, y = y,
-                    texture = ICON.member,
-                    size = cfg.iconSize,
-                    tint = TINT.player,
-                }
-            end
+    for i = 1, #S.players do
+        local x, y = actorLocation(S.players[i])
+        if x ~= nil then
+            marks[#marks + 1] = { x = x, y = y, texture = ICON.member,
+                                  size = cfg.iconSize, tint = TINT.player }
+        end
+    end
+
+    for i = 1, #S.npcs do
+        local x, y = actorLocation(S.npcs[i])
+        if x ~= nil then
+            marks[#marks + 1] = { x = x, y = y, texture = ICON.member,
+                                  size = cfg.iconSize, tint = TINT.npc }
         end
     end
 
@@ -312,9 +308,8 @@ function M.collect(cfg)
 end
 
 function M.forget()
-    S.pals = {}
-    S.players = {}
-    S.static = {}
+    S.pals, S.players, S.npcs, S.static = {}, {}, {}, {}
+    S.campNear = false
     S.lastScan = 0.0
 end
 

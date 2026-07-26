@@ -45,29 +45,52 @@ local UI = {
 -- key, label, kind, and for sliders min/max/step
 local LAYOUT = {
     { header = "Minimap" },
-    { key = "enabled",          label = "Show minimap",            kind = "bool" },
-    { key = "size",             label = "Size",                    kind = "int", min = 120, max = 480 },
-    { key = "opacity",          label = "Opacity",                 kind = "pct" },
-    { key = "zoom",             label = "Zoom (world units)",      kind = "int", min = 4000, max = 120000, step = 1000 },
-    { key = "rotateWithCamera", label = "Rotate with camera",      kind = "bool" },
-    { key = "iconSize",         label = "Icon size",               kind = "int", min = 10, max = 40 },
+    { key = "enabled",           label = "Show minimap",             kind = "bool" },
+    { key = "size",              label = "Size",                     kind = "int", min = 120, max = 480 },
+    { key = "opacity",           label = "Opacity",                  kind = "pct" },
+    { key = "circular",          label = "Circular shape",           kind = "bool" },
+    { key = "zoom",              label = "Zoom (world units)",       kind = "int", min = 4000, max = 120000, step = 1000 },
+    { key = "megazoom",          label = "Megazoom (F1) range",      kind = "int", min = 60000, max = 500000, step = 10000 },
+    { key = "autozoom",          label = "Auto zoom out while moving", kind = "bool" },
+    { key = "rotateWithCamera",  label = "Rotate with camera",       kind = "bool" },
+    { key = "lockIconsNorth",    label = "Keep icons upright",       kind = "bool" },
+    { key = "autohideInBase",    label = "Hide while in a base camp", kind = "bool" },
+    { key = "iconSize",          label = "Icon size",                kind = "int", min = 10, max = 40 },
 
     { header = "Pals" },
-    { key = "showPals",         label = "Show pals",               kind = "bool" },
-    { key = "onlyShinyPals",    label = "Only shiny pals",         kind = "bool" },
-    { key = "maxPalIcons",      label = "Max pal icons",           kind = "int", min = 8, max = 128 },
+    { key = "showPals",          label = "Show pals",                kind = "bool" },
+    { key = "onlyShinyPals",     label = "Only shiny pals",          kind = "bool" },
+    { key = "palsWhileMegazoom", label = "Show pals while megazoomed", kind = "bool" },
+    { key = "maxPalIcons",       label = "Max pal icons",            kind = "int", min = 8, max = 128 },
 
-    { header = "Players and points of interest" },
-    { key = "showPlayers",      label = "Show players",            kind = "bool" },
-    { key = "showChests",       label = "Show chests",             kind = "bool" },
-    { key = "showFastTravel",   label = "Show fast travel points", kind = "bool" },
-    { key = "showDungeons",     label = "Show dungeons",           kind = "bool" },
-    { key = "showBaseCamps",    label = "Show base camps",         kind = "bool" },
+    { header = "People" },
+    { key = "showPlayers",       label = "Show other players",       kind = "bool" },
+    { key = "showNPCs",          label = "Show NPC humans",          kind = "bool" },
+    { key = "showDeaths",        label = "Show death locations",     kind = "bool" },
+
+    { header = "Items" },
+    { key = "hideCollected",     label = "Hide collected items",     kind = "bool" },
+    { key = "showChests",        label = "Show chests",              kind = "bool" },
+    { key = "showEggs",          label = "Show eggs",                kind = "bool" },
+    { key = "showNotes",         label = "Show notes",               kind = "bool" },
+    { key = "showEffigies",      label = "Show lifmunk effigies",    kind = "bool" },
+    { key = "showSkillFruit",    label = "Show skillfruit trees",    kind = "bool" },
+
+    { header = "Points of interest" },
+    { key = "showFastTravel",    label = "Show fast travel points",  kind = "bool" },
+    { key = "showDungeons",      label = "Show dungeons",            kind = "bool" },
+    { key = "showTowers",        label = "Show towers",              kind = "bool" },
+    { key = "showBaseCamps",     label = "Show player base camps",   kind = "bool" },
+    { key = "showEnemyCamps",    label = "Show enemy camps",         kind = "bool" },
+
+    { header = "Scanning" },
+    { key = "scanIntervalMs",    label = "Rescan every (ms)",        kind = "int", min = 1000, max = 20000, step = 500 },
+    { key = "maxPoiIcons",       label = "Max point-of-interest icons", kind = "int", min = 8, max = 128 },
 
     { header = "Map orientation (only if the map looks wrong)" },
-    { key = "axis.swapXY",      label = "Swap X / Y",              kind = "bool" },
-    { key = "axis.flipH",       label = "Mirror horizontally",     kind = "bool" },
-    { key = "axis.flipV",       label = "Mirror vertically",       kind = "bool" },
+    { key = "axis.swapXY",       label = "Swap X / Y",               kind = "bool" },
+    { key = "axis.flipH",        label = "Mirror horizontally",      kind = "bool" },
+    { key = "axis.flipV",        label = "Mirror vertically",        kind = "bool" },
 }
 
 -- ---------------------------------------------------------------
@@ -259,7 +282,7 @@ function M.build(pc, cfg)
         if vbox ~= nil then
             guard.get(function() head:AddChild(vbox) end)
             guard.get(function() vbox:AddChild(text("PalMiniMap 2", 24, UI.accent, 0)) end)
-            guard.get(function() vbox:AddChild(text("[ F5 ] close   [ F3 ] show/hide   [ F2 ] corner   [ +/- ] zoom",
+            guard.get(function() vbox:AddChild(text("[F5] close  [F1] megazoom  [F2] corner  [F3] show/hide  [F4] edit  [+/-] zoom",
                                                     11, UI.muted, 0)) end)
         end
         pad(guard.get(function() return scroll:AddChild(head) end), 0, 0, 0, 8)

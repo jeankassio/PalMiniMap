@@ -114,7 +114,18 @@ local function playerState()
         local y2 = guard.get(function() return rot.Yaw end)
         if type(y2) == "number" then yaw = y2 end
     end
-    return { x = x, y = y, yaw = yaw }
+    -- speed drives autozoom; velocity is centimetres per second
+    local speed = 0.0
+    local vel = guard.get(function() return pawn:GetVelocity() end)
+    if vel ~= nil then
+        local vx = guard.get(function() return vel.X end)
+        local vy = guard.get(function() return vel.Y end)
+        local vz = guard.get(function() return vel.Z end)
+        if type(vx) == "number" and type(vy) == "number" then
+            speed = math.sqrt(vx * vx + vy * vy + (type(vz) == "number" and vz * vz or 0))
+        end
+    end
+    return { x = x, y = y, yaw = yaw, speed = speed }
 end
 
 -- ---------------------------------------------------------------
@@ -202,7 +213,23 @@ local function movementTick()
     if not settled() then return end
     local p = playerState()
     if p == nil then return end
-    render.update(cfg, p, sources.collect(cfg))
+    -- 1.x's "autohide minimap while in base camps"
+    local hide = cfg.autohideInBase and sources.insideBaseCamp()
+    if hide ~= (not render.isVisible()) then
+        render.setVisible(not hide)
+    end
+    if hide then return end
+    -- while megazoomed, pal icons are optional (1.x: "show pal icons while
+    -- megazoomed out") - they turn into noise at region scale
+    local marks = sources.collect(cfg)
+    if cfg.megazoomActive and not cfg.palsWhileMegazoom then
+        local filtered = {}
+        for i = 1, #marks do
+            if not marks[i].isPal then filtered[#filtered + 1] = marks[i] end
+        end
+        marks = filtered
+    end
+    render.update(cfg, p, marks)
 end
 
 local function scanTick()
@@ -267,8 +294,42 @@ end
 
 local function zoomBy(delta)
     if menu.isOpen() then return end
+    if editMode then
+        -- in edit mode +/- resize the window instead, exactly as in 1.x
+        resize(delta < 0 and 10 or -10)
+        return
+    end
     cfg.zoom = config.clamp(cfg.zoom + delta, cfg.zoomMin, cfg.zoomMax)
     config.save()
+end
+
+local function toggleMegazoom()
+    cfg.megazoomActive = not cfg.megazoomActive
+    config.save()
+    guard.log("megazoom " .. (cfg.megazoomActive and "on" or "off"))
+end
+
+-- Edit mode (1.x F4): arrow keys move the window, +/- resize it.
+local editMode = false
+
+local function toggleEditMode()
+    editMode = not editMode
+    if not editMode then config.save() end
+    guard.log("edit mode " .. (editMode and "on - arrows move, +/- resize"
+                                        or "off - layout saved"))
+end
+
+local function nudge(dx, dy)
+    if not editMode then return end
+    cfg.x = cfg.x + dx
+    cfg.y = cfg.y + dy
+    local vw, vh = viewportSize()
+    render.applyLayout(cfg, vw, vh)
+end
+
+local function resize(delta)
+    cfg.size = config.clamp(cfg.size + delta, 120, 480)
+    render.destroy()   -- the maintenance tick rebuilds at the new size
 end
 
 -- ---------------------------------------------------------------
@@ -328,8 +389,14 @@ end
 
 if type(Key) == "table" then
     bind("config menu (F5)", Key.F5, toggleMenu)
+    bind("megazoom (F1)", Key.F1, toggleMegazoom)
     bind("toggle minimap (F3)", Key.F3, toggleVisible)
     bind("cycle corner (F2)", Key.F2, cycleCorner)
+    bind("edit mode (F4)", Key.F4, toggleEditMode)
+    bind("edit move left",  Key.LEFT,  function() nudge(-10, 0) end)
+    bind("edit move right", Key.RIGHT, function() nudge(10, 0) end)
+    bind("edit move up",    Key.UP,    function() nudge(0, -10) end)
+    bind("edit move down",  Key.DOWN,  function() nudge(0, 10) end)
     bind("zoom in (+)", Key.ADD, function() zoomBy(-cfg.zoomStep) end)
     bind("zoom in (=)", Key.OEM_PLUS, function() zoomBy(-cfg.zoomStep) end)
     bind("zoom out (-)", Key.SUBTRACT, function() zoomBy(cfg.zoomStep) end)

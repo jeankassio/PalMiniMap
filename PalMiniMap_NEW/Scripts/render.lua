@@ -30,12 +30,14 @@ local VIS_SHOW, VIS_HIDE = 3, 1
 local CLIP_BOUNDS = 1
 
 local MAP_TEXTURE = "/Game/Pal/Texture/UI/Map/T_WorldMap.T_WorldMap"
+local CIRCLE_TEXTURE = "/Game/Pal/Texture/UI/Map/T_prt_map_circle_eff.T_prt_map_circle_eff"
 local MAX_TEX_ATTEMPTS = 8
 
 local S = {
     widget = nil, tree = nil,
     frame = nil, frameSlot = nil,
     viewport = nil,
+    circleOverlay = nil, circleSlot = nil,
     mapImage = nil, mapSlot = nil,
     playerIcon = nil, playerSlot = nil,
     pool = {},              -- { image=, slot=, inUse= }
@@ -99,6 +101,25 @@ local function place(slot, x, y, w, h)
     end
 end
 
+-- Effective zoom, folding in the two zoom modes 1.x had:
+--   * megazoom (F1) replaces the zoom outright;
+--   * autozoom widens the view as the player moves faster, so walking is
+--     tight and flying shows more ground.
+-- `speed` is centimetres per second, straight from the pawn's velocity.
+function M.effectiveZoom(cfg, speed)
+    if cfg.megazoomActive then return cfg.megazoom end
+    local zoom = cfg.zoom
+    if cfg.autozoom and type(speed) == "number" then
+        local mult = cfg.autozoomWalk
+        if speed > 1100 then mult = cfg.autozoomFly
+        elseif speed > 450 then mult = cfg.autozoomRun end
+        zoom = zoom * mult
+    end
+    if zoom < cfg.zoomMin then zoom = cfg.zoomMin end
+    if zoom > cfg.zoomMax * 4 then zoom = cfg.zoomMax * 4 end
+    return zoom
+end
+
 -- ---------------------------------------------------------------
 -- Build / teardown
 -- ---------------------------------------------------------------
@@ -111,6 +132,7 @@ function M.destroy()
     S.widget, S.tree = nil, nil
     S.frame, S.frameSlot, S.viewport = nil, nil, nil
     S.mapImage, S.mapSlot = nil, nil
+    S.circleOverlay, S.circleSlot = nil, nil
     S.playerIcon, S.playerSlot = nil, nil
     S.pool = {}
     S.visible = false
@@ -167,6 +189,22 @@ function M.build(pc, cfg)
     if S.mapImage == nil then M.destroy(); return false end
     S.mapSlot = addToCanvas(S.viewport, S.mapImage)
     setVisible(S.mapImage, true)
+
+    -- Circular shape: a real alpha mask needs a material, which we cannot
+    -- author from Lua, so the round look comes from the game's own circular
+    -- overlay drawn on top. Icons are additionally culled to the inscribed
+    -- circle in update(), so the shape is honoured even where the art is
+    -- only decorative.
+    S.circleOverlay = construct("/Script/UMG.Image", S.tree)
+    if S.circleOverlay ~= nil then
+        S.circleSlot = addToCanvas(S.viewport, S.circleOverlay)
+        guard.get(function() S.circleSlot:SetZOrder(80) end)
+        local ctex = loadTexture(CIRCLE_TEXTURE)
+        if ctex ~= nil then
+            guard.get(function() S.circleOverlay:SetBrushFromTexture(ctex, false) end)
+        end
+        setVisible(S.circleOverlay, false)
+    end
 
     -- icon pool: allocated once, reused forever. No allocation, no
     -- destruction and no GC churn while playing.
@@ -253,7 +291,8 @@ function M.update(cfg, player, marks)
     -- world units across the window -> pixels per normalised unit
     local spanWorld = region.maxX - region.minX
     if spanWorld <= 0 then return end
-    local imagePx = size * (spanWorld / cfg.zoom)
+    local zoom = M.effectiveZoom(cfg, player.speed)
+    local imagePx = size * (spanWorld / zoom)
 
     -- background: one quad, moved so the player's point sits at the centre
     local tex = loadTexture(MAP_TEXTURE)
@@ -286,6 +325,15 @@ function M.update(cfg, player, marks)
         end)
     end
 
+    -- circular shape: overlay art plus a real radius test on the icons
+    local round = cfg.circular == true
+    if S.circleSlot ~= nil then
+        place(S.circleSlot, 0, 0, size, size)
+        setVisible(S.circleOverlay, round)
+    end
+    local radius = half - (cfg.iconSize * 0.35)
+    local radius2 = radius * radius
+
     -- icons
     local used = 0
     local limit = #S.pool
@@ -301,8 +349,14 @@ function M.update(cfg, player, marks)
                 dx, dy = dx * cosA - dy * sinA, dx * sinA + dy * cosA
             end
             -- cull anything outside the window before touching a widget
-            if dx > -half - margin and dx < half + margin
-               and dy > -half - margin and dy < half + margin then
+            local inside
+            if round then
+                inside = (dx * dx + dy * dy) <= radius2
+            else
+                inside = dx > -half - margin and dx < half + margin
+                         and dy > -half - margin and dy < half + margin
+            end
+            if inside then
                 used = used + 1
                 local entry = S.pool[used]
                 local isz = m.size or cfg.iconSize
@@ -319,6 +373,14 @@ function M.update(cfg, player, marks)
                 end
                 if m.tint ~= nil then
                     guard.get(function() entry.image:SetColorAndOpacity(m.tint) end)
+                end
+                -- 1.x's "lock all icon rotations to north": the map may spin,
+                -- the icons should not
+                if rotate then
+                    guard.get(function()
+                        entry.image:SetRenderTransformAngle(
+                            cfg.lockIconsNorth and 0.0 or player.yaw)
+                    end)
                 end
                 if not entry.inUse then
                     setVisible(entry.image, true)

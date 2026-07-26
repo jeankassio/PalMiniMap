@@ -27,16 +27,40 @@ local DEFAULTS = {
     zoomMax            = 120000,
     zoomStep           = 2000,
 
+    -- megazoom: the F1 "see the whole region" toggle from 1.x
+    megazoom           = 260000,
+    megazoomActive     = false,
+    palsWhileMegazoom  = false,   -- 1.x: "show pal icons while megazoomed out"
+
+    -- autozoom: widen the view as the player moves faster, like 1.x did
+    autozoom           = true,
+    autozoomWalk       = 1.0,     -- multiplier at walking speed
+    autozoomRun        = 1.45,
+    autozoomFly        = 2.20,
+
     rotateWithCamera   = false,   -- false = north is always up
+    lockIconsNorth     = true,    -- keep icons upright when the map rotates
+
+    autohideInBase     = false,   -- 1.x: "autohide minimap while in base camps"
+    baseCampRadius     = 12000,   -- how close counts as "inside a base camp"
+
+    hideCollected      = true,    -- 1.x: "hide collected items from minimap"
 
     showPals           = true,
     onlyShinyPals      = false,
     showPlayers        = true,
-    showNPCs           = false,
+    showNPCs           = true,
     showChests         = true,
+    showEggs           = true,
+    showNotes          = true,
+    showEffigies       = false,
+    showSkillFruit     = true,
     showFastTravel     = true,
     showBaseCamps      = true,
+    showEnemyCamps     = true,
     showDungeons       = true,
+    showTowers         = true,
+    showDeaths         = true,
 
     iconSize           = 18,
     playerIconSize     = 22,

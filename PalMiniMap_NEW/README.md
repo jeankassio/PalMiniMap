@@ -57,34 +57,107 @@ corrects itself if a game update moves the world.
 
 | key | action |
 |---|---|
-| `F3` | show / hide |
+| `F1` | megazoom (region view) |
 | `F2` | cycle corner |
+| `F3` | show / hide |
+| `F4` | edit mode — arrows move, `+`/`-` resize |
+| `F5` | configuration menu |
 | `+` / `-` | zoom |
+
+Same layout as 1.x, deliberately.
+
+## Feature parity with 1.x
+
+Everything the 1.x menu offered, except the options that configured
+machinery version 2 no longer has:
+
+| 1.x option | 2.0.1 |
+|---|---|
+| Enable mod | `enabled` (F3) |
+| Minimap opacity | yes |
+| Minimap shape (circle/square) | yes — `circular` |
+| Autozoom while moving | yes — widens with walk/run/fly speed |
+| Rotation lock (north up) | yes — `rotateWithCamera` |
+| Lock all icon rotations to north | yes — `lockIconsNorth` |
+| Autohide while in base camps | yes — `autohideInBase` |
+| Hide collected items | yes — `hideCollected` |
+| Show pal positions | yes |
+| Only show shiny pals | yes — via `IsRarePal()` |
+| Show pal icons while megazoomed | yes — `palsWhileMegazoom` |
+| Show NPC humans | yes |
+| Show player base camps / enemy camps | yes |
+| Show player death locations | yes |
+| Show other players | yes |
+| Show dungeons / towers | yes |
+| Show chests / eggs / notes | yes |
+| Show fast travel points | yes |
+| Show skillfruit trees | yes |
+| Show lifmunk effigies | yes |
+| Rescan frequency | yes — one control instead of five |
+| Keybinds F1–F5 | yes, same layout |
+| Minimap render resolution | **gone** — configured the scene capture |
+| Minimap capture LOD bias | **gone** — same reason |
+| Edit mode "new size method" | **gone** — `+`/`-` always resize in edit mode |
+
+Two rows are new: **map orientation** (the escape hatch described below)
+and a single **rescan interval** replacing 1.x's five separate ones.
+
+## Where the object classes come from
+
+Not guesswork either. Every class scanned was read out of the original
+Paldar blueprint's import table — these are literally the classes the 1.x
+mod used, so they are known-good on this build:
+
+`PalCharacter` · `PalPlayerCharacter` · `PalNPC` ·
+`PalMapObjectTreasureBox` · `PalMapObjectPalEgg` · `PalLevelObjectNote` ·
+`PalLevelObjectRelic` · `PalLevelObjectUnlockableFastTravelPoint` ·
+`BP_DungeonEntrance_Base_C` · `PalBuildObjectBaseCampPoint` ·
+`PalNPCCampSpawnerBase` · `PalBossTower` ·
+`PalMapObjectSpawnerMultiItem` · `BP_MapObject_DeathPenaltyChest_C`
+
+2.0.0 scanned the generic `PalMapObject` instead, which is why every wall
+and foundation of the player's base showed up as a marker.
+
+Pal species come from the actor name (`BP_<Tribe>_C_<id>` → `<Tribe>`),
+which is exactly how the blueprint looked up its icon table, and the tribe
+maps straight onto `/Game/Pal/Texture/PalIcon/Normal/T_<Tribe>_icon_normal`
+— 137 species icons, nothing shipped.
 
 Settings live in `minimap_settings.json` next to the mod folder. It is plain
 JSON owned by this mod — nothing else reads it, so there is no half-written-file
 race like the 1.x `Paldar.modconfig.json` had. Writes are atomic anyway.
 
-## Status — read this before shipping
+## Status
 
-Verified without the game running: all modules load, 6 keybinds + 3 loops + 1
-world hook register, every loop tick runs without raising, the widget builds, and
-the coordinate transform maps corners to corners and centre to centre.
+**Confirmed in game (2.0.0 test run):** the terrain renders, the world→map
+transform is correct, the player marker sits where it should, and the default
+axis orientation (north up) is right — so the constants decoded from
+`DT_WorldMapUIData` are good and the orientation controls are only an escape
+hatch, not something you should need.
 
-**Not yet verified in game**, because that needs a running session:
+**Fixed in 2.0.1, from that run:**
 
-- **Map orientation.** Which world axis runs which way on `T_WorldMap` is a
-  convention the data table does not state. The default (`swapXY` on, `flipV` on
-  — north up, east right) is the usual UE layout, and any of the eight
-  orientations is reachable from the `axis` block in the settings file. If the
-  map is mirrored or rotated on first run, that is the knob — no code change.
-- **Scan class names.** `PalCharacter`, `PalPlayerCharacter` and `PalMapObject`
-  come from the game's type mapping, but the engine may spawn blueprint
-  subclasses instead. The first scan logs exactly what it matched (or that it
-  matched nothing), so `UE4SS.log` says what to fix.
-- **Per-species pal icons.** Currently every pal draws one generic marker. The
-  mapping to `/Game/Pal/Texture/PalIcon/Normal/T_<Tribe>_icon_normal` is known
-  and is the obvious next step; it needs the tribe name read off the character.
-- **POI categories.** Chests, fast travel points, dungeons and camps are all
-  found through `PalMapObject` and currently share one marker. Splitting them
-  needs the per-object type read, which is the same follow-up.
+- pals drew a generic arrow — now they draw their own species portrait;
+- every base wall and foundation showed as a marker — the scan used the
+  generic `PalMapObject`; it now scans the exact classes listed above;
+- there was no menu — `F5` now opens the full configuration window, and
+  `F1`/`F4` restore megazoom and edit mode.
+
+**Verified without the game:** all eight modules load, 13 keybinds + 4 loops
++ 1 world hook register, every loop tick runs without raising, the menu opens
+and its controls poll, the widget builds, species parsing returns `Anubis` and
+`FlameBuffalo_Ice`, and the transform maps corners to corners.
+
+**Still needs a real session to confirm**, because a stubbed engine cannot
+prove it:
+
+- whether every scanned class actually returns objects on a live world. The
+  first scan logs one line per class with the count — or says it found
+  nothing — so `UE4SS.log` answers this immediately.
+- the circular shape. A true alpha mask needs a material, which Lua cannot
+  author, so the round look is the game's own circular overlay plus a real
+  radius test on the icons. If the overlay art does not suit, the honest
+  options are shipping a mask material or leaving the minimap square.
+- `PalMapObjectSpawnerMultiItem` is the least certain mapping — it is the
+  class the blueprint imported alongside the skillfruit scan, but it may
+  cover other spawners too.
