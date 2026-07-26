@@ -129,35 +129,57 @@ race like the 1.x `Paldar.modconfig.json` had. Writes are atomic anyway.
 
 ## Status
 
-**Confirmed in game (2.0.0 test run):** the terrain renders, the world→map
+**Confirmed in game (2.0.0/2.0.1 runs):** the terrain renders, the world→map
 transform is correct, the player marker sits where it should, and the default
-axis orientation (north up) is right — so the constants decoded from
-`DT_WorldMapUIData` are good and the orientation controls are only an escape
-hatch, not something you should need.
+axis orientation (north up) is right — the constants decoded from
+`DT_WorldMapUIData` are good, so the orientation controls are only an escape
+hatch.
 
-**Fixed in 2.0.1, from that run:**
+**Fixed in 2.0.2:**
 
-- pals drew a generic arrow — now they draw their own species portrait;
-- every base wall and foundation showed as a marker — the scan used the
-  generic `PalMapObject`; it now scans the exact classes listed above;
-- there was no menu — `F5` now opens the full configuration window, and
-  `F1`/`F4` restore megazoom and edit mode.
+- the minimap drew on top of the game's own menus. It now hides whenever the
+  game shows a full-screen UI (detected from the mouse cursor being enabled),
+  while staying visible for our own F5 window so changes preview live;
+- the F5 menu opened without a usable mouse. Setting the cursor once was not
+  enough — Palworld drives its own input state during gameplay and put it
+  straight back. The input mode and cursor are now re-asserted on every poll
+  tick for as long as the window is open;
+- **F2 and F4 appeared to do nothing, and it was one root cause.** Negative
+  (edge-relative) coordinates need the viewport size, which was read through
+  `APlayerController::GetViewportSize` — two OUT parameters, which does not
+  survive reflection reliably. With no size, both axes fell through to the
+  `x=40` fallback and all four corner presets collapsed onto the top-left.
+  The size now comes from `UWidgetLayoutLibrary::GetViewportSize` (a single
+  `FVector2D`), is cached, and `applyLayout` is never called without it;
+- edit mode had no visual feedback; it now tints the window while active;
+- corner margins are size-independent: a negative coordinate is a margin from
+  the edge, so presets survive a size or resolution change;
+- update rate and rescan interval are now live. Both loops tick fast and gate
+  internally, because `LoopAsync` fixes its interval at registration — before
+  this, changing them in the menu did nothing until a restart.
 
-**Verified without the game:** all eight modules load, 13 keybinds + 4 loops
-+ 1 world hook register, every loop tick runs without raising, the menu opens
-and its controls poll, the widget builds, species parsing returns `Anubis` and
-`FlameBuffalo_Ice`, and the transform maps corners to corners.
+**On "minimap quality":** 1.x had that slider, but what it changed was the
+scene capture's render-target resolution, and 2.x has no scene capture — the
+terrain is the game's own map texture drawn as one quad, so there is no
+resolution to trade away. The real performance knobs are in the new
+**Performance** section: update rate, rescan interval and icon budget. Saying
+so plainly seemed better than shipping a slider that does nothing.
 
-**Still needs a real session to confirm**, because a stubbed engine cannot
-prove it:
+**Verified without the game:** all eight modules load, 13 keybinds + 4 loops +
+1 world hook register, every loop tick and key callback runs without raising,
+the menu opens and polls, species parsing returns `Anubis` and
+`FlameBuffalo_Ice`, the transform maps corners to corners, and the four corner
+presets now resolve to four distinct screen positions both with and without a
+viewport size.
 
-- whether every scanned class actually returns objects on a live world. The
-  first scan logs one line per class with the count — or says it found
-  nothing — so `UE4SS.log` answers this immediately.
+**Still needs a real session:**
+
+- whether every scanned class returns objects on a live world. The first scan
+  logs one line per class with a count, or says it found nothing.
 - the circular shape. A true alpha mask needs a material, which Lua cannot
-  author, so the round look is the game's own circular overlay plus a real
-  radius test on the icons. If the overlay art does not suit, the honest
-  options are shipping a mask material or leaving the minimap square.
-- `PalMapObjectSpawnerMultiItem` is the least certain mapping — it is the
-  class the blueprint imported alongside the skillfruit scan, but it may
-  cover other spawners too.
+  author, so the round look is the game's own circular overlay plus a radius
+  test on the icons. If the art does not suit, the honest options are shipping
+  a mask material or leaving the minimap square.
+- whether hiding on `bShowMouseCursor` catches every game UI. It covers the
+  Esc menu, inventory and the big map; if some screen does not enable the
+  cursor, the minimap would stay visible over it.

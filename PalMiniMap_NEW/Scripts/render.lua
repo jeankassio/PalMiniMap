@@ -45,7 +45,22 @@ local S = {
     texAttempts = {},
     visible = false,
     builtSize = nil,
+    viewW = nil, viewH = nil,
+    editMode = false,
+    editBorder = nil, editSlot = nil,
 }
+
+-- Viewport size, remembered. applyLayout used to be called from build()
+-- with no size at all, so a negative (edge-relative) coordinate fell
+-- through to the x=40 fallback and ALL FOUR corner presets collapsed onto
+-- the top-left -- which is why F2 and F4 looked like they did nothing.
+function M.setViewport(w, h)
+    if type(w) == "number" and w > 0 and type(h) == "number" and h > 0 then
+        S.viewW, S.viewH = w, h
+        return true
+    end
+    return false
+end
 
 local function cls(path)
     local obj = guard.get(StaticFindObject, path)
@@ -133,6 +148,7 @@ function M.destroy()
     S.frame, S.frameSlot, S.viewport = nil, nil, nil
     S.mapImage, S.mapSlot = nil, nil
     S.circleOverlay, S.circleSlot = nil, nil
+    S.editBorder, S.editSlot = nil, nil
     S.playerIcon, S.playerSlot = nil, nil
     S.pool = {}
     S.visible = false
@@ -219,6 +235,18 @@ function M.build(pc, cfg)
         end
     end
 
+    -- edit-mode highlight: hidden normally, shown while F4 is active
+    S.editBorder = construct("/Script/UMG.Border", S.tree)
+    if S.editBorder ~= nil then
+        guard.get(function()
+            S.editBorder:SetBrushColor({ R = 0.33, G = 0.78, B = 0.96, A = 0.28 })
+        end)
+        S.editSlot = addToCanvas(S.viewport, S.editBorder)
+        guard.get(function() S.editSlot:SetZOrder(90) end)
+        place(S.editSlot, 0, 0, size, size)
+        setVisible(S.editBorder, false)
+    end
+
     -- the player marker sits on top, always dead centre
     S.playerIcon = construct("/Script/UMG.Image", S.tree)
     if S.playerIcon ~= nil then
@@ -243,6 +271,7 @@ function M.build(pc, cfg)
 
     S.builtSize = size
     S.visible = true
+    M.setEditMode(S.editMode)
     M.applyLayout(cfg)
     guard.log(string.format("minimap built (%dpx, %d icon slots)", size, #S.pool))
     return true
@@ -253,14 +282,30 @@ end
 -- resolution.
 function M.applyLayout(cfg, viewportW, viewportH)
     if not M.isBuilt() then return end
+    M.setViewport(viewportW, viewportH)
+    -- 1920x1080 is only the last resort; the corners still land in four
+    -- distinct places instead of stacking, and the next tick with a real
+    -- viewport size corrects it.
+    local vw = S.viewW or 1920
+    local vh = S.viewH or 1080
     local size = cfg.size
     local x, y = cfg.x, cfg.y
-    if x < 0 and viewportW then x = viewportW + x - size end
-    if y < 0 and viewportH then y = viewportH + y - size end
-    if x < 0 then x = 40 end
-    if y < 0 then y = 40 end
+    if x < 0 then x = vw + x - size end
+    if y < 0 then y = vh + y - size end
+    -- keep it on screen whatever the settings say
+    if x < 0 then x = 0 elseif x > vw - size then x = vw - size end
+    if y < 0 then y = 0 elseif y > vh - size then y = vh - size end
     place(S.frameSlot, x, y, size, size)
+    if S.editSlot ~= nil then place(S.editSlot, 0, 0, size, size) end
     guard.get(function() S.widget:SetRenderOpacity(cfg.opacity) end)
+end
+
+-- Edit mode needs to be obvious, otherwise the arrow keys feel broken.
+function M.setEditMode(on)
+    S.editMode = on and true or false
+    if S.editBorder ~= nil then
+        setVisible(S.editBorder, S.editMode)
+    end
 end
 
 function M.setVisible(on)

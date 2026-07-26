@@ -14,8 +14,10 @@ local M = {}
 
 local DEFAULTS = {
     enabled            = true,
-    -- placement, in viewport pixels; negative counts back from the edge
-    x                  = -280,
+    -- placement in viewport pixels; a NEGATIVE value is a margin measured
+    -- from the right/bottom edge, so the layout survives a resolution or
+    -- size change
+    x                  = -40,
     y                  = 40,
     size               = 240,
     opacity            = 0.92,

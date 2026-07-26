@@ -27,6 +27,7 @@ local S = {
     controls = {},
     open = false,
     world = "",
+    pc = nil,
     -- NOT 0: the debounce compares against os.clock(), which is small right
     -- after the process starts, so a 0 here silently swallows the very first
     -- key press. Start far enough back that the first press always counts.
@@ -83,8 +84,15 @@ local LAYOUT = {
     { key = "showBaseCamps",     label = "Show player base camps",   kind = "bool" },
     { key = "showEnemyCamps",    label = "Show enemy camps",         kind = "bool" },
 
-    { header = "Scanning" },
-    { key = "scanIntervalMs",    label = "Rescan every (ms)",        kind = "int", min = 1000, max = 20000, step = 500 },
+    -- 1.x had a "minimap quality" slider, but what it actually changed was
+    -- the scene capture's render-target resolution, and there is no scene
+    -- capture in 2.x - the terrain is the game's own map texture, drawn as
+    -- one quad, so there is no resolution to trade away. These three are
+    -- the real performance knobs now: how often the icons are repositioned,
+    -- how often the world is rescanned, and how many icons may exist.
+    { header = "Performance" },
+    { key = "moveIntervalMs",    label = "Update rate (ms, lower = smoother)", kind = "int", min = 33, max = 500, step = 1 },
+    { key = "scanIntervalMs",    label = "Rescan world every (ms)",  kind = "int", min = 1000, max = 20000, step = 500 },
     { key = "maxPoiIcons",       label = "Max point-of-interest icons", kind = "int", min = 8, max = 128 },
 
     { header = "Map orientation (only if the map looks wrong)" },
@@ -164,6 +172,42 @@ local function addRow(scroll, child, t, b)
     local slot = guard.get(function() return scroll:AddChild(child) end)
     pad(slot, 6, t or 4, 6, b or 4)
     return slot
+end
+
+-- ---------------------------------------------------------------
+-- Input mode
+--
+-- Setting the cursor once when the window opens was not enough: Palworld
+-- drives its own input state during gameplay and puts the cursor straight
+-- back, which is why 2.0.1's menu came up with no usable mouse and only
+-- became clickable after opening the game's Esc menu. So we assert it on
+-- every poll tick (4x a second, two property writes) for as long as the
+-- window is open, and hand control back cleanly on close.
+-- EMouseLockMode: 0 DoNotLock. UIOnly is the right mode for a modal
+-- window; GameAndUI is kept as a fallback for builds without it.
+-- ---------------------------------------------------------------
+local function applyInputMode(pc, widget)
+    if pc == nil or not guard.alive(pc) then return end
+    local wbl = cls("/Script/UMG.Default__WidgetBlueprintLibrary")
+    if wbl ~= nil and widget ~= nil then
+        local ok = guard.get(function()
+            wbl:SetInputMode_UIOnlyEx(pc, widget, 0)
+            return true
+        end)
+        if ok == nil then
+            guard.get(function() wbl:SetInputMode_GameAndUIEx(pc, widget, 0, false) end)
+        end
+    end
+    guard.get(function() pc.bShowMouseCursor = true end)
+end
+
+local function releaseInputMode(pc)
+    if pc == nil or not guard.alive(pc) then return end
+    local wbl = cls("/Script/UMG.Default__WidgetBlueprintLibrary")
+    if wbl ~= nil then
+        guard.get(function() wbl:SetInputMode_GameOnly(pc) end)
+    end
+    guard.get(function() pc.bShowMouseCursor = false end)
 end
 
 -- ---------------------------------------------------------------
@@ -315,6 +359,7 @@ local function drop()
     S.widget, S.tree = nil, nil
     S.controls = {}
     S.open = false
+    S.pc = nil
 end
 
 function M.isOpen() return S.open end
@@ -329,14 +374,8 @@ function M.close(pc)
     if S.widget ~= nil and guard.alive(S.widget) then
         guard.get(function() S.widget:RemoveFromParent() end)
     end
+    releaseInputMode(pc or S.pc)
     drop()
-    if pc ~= nil and guard.alive(pc) then
-        guard.get(function()
-            local wbl = cls("/Script/UMG.Default__WidgetBlueprintLibrary")
-            if wbl then wbl:SetInputMode_GameOnly(pc) end
-            pc.bShowMouseCursor = false
-        end)
-    end
     guard.log("menu closed")
 end
 
@@ -349,11 +388,10 @@ function M.open(pc, cfg, worldName)
     local ok = guard.try("buildMenu", function()
         if not M.build(pc, cfg) then error("could not build the menu widget") end
         guard.get(function() S.widget:AddToViewport(99) end)
-        guard.get(function()
-            local wbl = cls("/Script/UMG.Default__WidgetBlueprintLibrary")
-            if wbl then wbl:SetInputMode_GameAndUIEx(pc, S.widget, 0, false) end
-            pc.bShowMouseCursor = true
-        end)
+        -- the root must hit-test, or clicks fall straight through to the game
+        guard.get(function() S.widget:SetVisibility(VIS_SHOW) end)
+        guard.get(function() S.widget.bIsFocusable = true end)
+        applyInputMode(pc, S.widget)
     end)
     if not ok then
         if S.widget ~= nil and guard.alive(S.widget) then
@@ -363,6 +401,7 @@ function M.open(pc, cfg, worldName)
         return
     end
     S.open = true
+    S.pc = pc
     S.world = worldName or ""
     guard.log("menu opened")
 end
@@ -420,7 +459,13 @@ end
 function M.poll(cfg)
     M.cfg = cfg
     if not S.open then return end
-    if not M.usable() then drop(); return end
+    if not M.usable() then
+        releaseInputMode(S.pc)
+        drop()
+        return
+    end
+    -- keep the cursor alive; the game puts it back every frame otherwise
+    applyInputMode(S.pc, S.widget)
     local now = os.clock()
     local pending = {}
     for _, c in ipairs(S.controls) do

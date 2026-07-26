@@ -181,16 +181,50 @@ local function currentWorldName()
     return tostring(n)
 end
 
+-- Viewport size. UWidgetLayoutLibrary::GetViewportSize returns a single
+-- FVector2D, which survives reflection cleanly; APlayerController::
+-- GetViewportSize hands back two OUT parameters, which does not always
+-- come through. Reading it via the controller was why the size was
+-- unavailable and the corner presets collapsed. The last good value is
+-- cached so a momentary failure never resets the layout.
+local lastViewW, lastViewH = nil, nil
+
 local function viewportSize()
     local pc = playerController()
-    if pc == nil then return nil, nil end
-    local ok, x, y = guard.try("GetViewportSize", function()
-        return pc:GetViewportSize()
-    end)
-    if ok and type(x) == "number" and type(y) == "number" and x > 0 then
-        return x, y
+    if pc ~= nil then
+        local wll = guard.get(StaticFindObject,
+            "/Script/UMG.Default__WidgetLayoutLibrary")
+        if wll ~= nil then
+            local v = guard.get(function() return wll:GetViewportSize(pc) end)
+            if v ~= nil then
+                local x = guard.get(function() return v.X end)
+                local y = guard.get(function() return v.Y end)
+                if type(x) == "number" and x > 0 and type(y) == "number" and y > 0 then
+                    lastViewW, lastViewH = x, y
+                    return x, y
+                end
+            end
+        end
+        local ok, x, y = guard.try("GetViewportSize", function()
+            return pc:GetViewportSize()
+        end)
+        if ok and type(x) == "number" and x > 0 and type(y) == "number" and y > 0 then
+            lastViewW, lastViewH = x, y
+            return x, y
+        end
     end
-    return nil, nil
+    return lastViewW, lastViewH
+end
+
+-- True while the game is showing a full-screen UI of its own (Esc menu,
+-- inventory, the big map...). Palworld turns the mouse cursor on for all
+-- of them, which is the cheapest reliable signal available from Lua. Our
+-- own menu is excluded, so opening F5 still previews changes live.
+local function gameUiOpen()
+    if menu.isOpen() then return false end
+    local pc = playerController()
+    if pc == nil then return false end
+    return guard.get(function() return pc.bShowMouseCursor end) == true
 end
 
 local function ensureWidget()
@@ -213,8 +247,10 @@ local function movementTick()
     if not settled() then return end
     local p = playerState()
     if p == nil then return end
-    -- 1.x's "autohide minimap while in base camps"
-    local hide = cfg.autohideInBase and sources.insideBaseCamp()
+    -- hide behind the game's own menus, and while inside a base camp if
+    -- the user asked for that
+    local hide = gameUiOpen()
+                 or (cfg.autohideInBase and sources.insideBaseCamp())
     if hide ~= (not render.isVisible()) then
         render.setVisible(not hide)
     end
@@ -268,11 +304,13 @@ end
 -- ---------------------------------------------------------------
 -- Controls
 -- ---------------------------------------------------------------
+-- A negative coordinate is a margin measured from the right/bottom edge,
+-- so these presets stay correct at any window size and any resolution.
 local CORNERS = {
-    { x = -280, y =  40 },   -- top right
-    { x =   40, y =  40 },   -- top left
-    { x =   40, y = -280 },  -- bottom left
-    { x = -280, y = -280 },  -- bottom right
+    { x = -40, y =  40 },   -- top right
+    { x =  40, y =  40 },   -- top left
+    { x =  40, y = -40 },   -- bottom left
+    { x = -40, y = -40 },   -- bottom right
 }
 local cornerIndex = 1
 
@@ -314,6 +352,7 @@ local editMode = false
 
 local function toggleEditMode()
     editMode = not editMode
+    render.setEditMode(editMode)
     if not editMode then config.save() end
     guard.log("edit mode " .. (editMode and "on - arrows move, +/- resize"
                                         or "off - layout saved"))
@@ -405,14 +444,28 @@ else
     guard.log("the UE4SS 'Key' table is missing; keybinds are unavailable")
 end
 
+-- LoopAsync fixes its interval at registration, so both loops tick fast and
+-- gate on the configured period internally. That is what makes the update
+-- rate and rescan interval in the menu take effect immediately instead of
+-- only after a restart.
+local lastMove, lastScan = 0.0, 0.0
+
 guard.register("movement loop", function()
-    LoopAsync(cfg.moveIntervalMs, guard.loopBody("movementTick", movementTick,
-        function() return cfg.enabled end))
+    LoopAsync(50, guard.loopBody("movementTick", function()
+        local now = os.clock()
+        if (now - lastMove) * 1000.0 < (cfg.moveIntervalMs or 100) then return end
+        lastMove = now
+        movementTick()
+    end, function() return cfg.enabled end))
 end)
 
 guard.register("scan loop", function()
-    LoopAsync(cfg.scanIntervalMs, guard.loopBody("scanTick", scanTick,
-        function() return cfg.enabled end))
+    LoopAsync(500, guard.loopBody("scanTick", function()
+        local now = os.clock()
+        if (now - lastScan) * 1000.0 < (cfg.scanIntervalMs or 4000) then return end
+        lastScan = now
+        scanTick()
+    end, function() return cfg.enabled end))
 end)
 
 guard.register("maintenance loop", function()
@@ -426,4 +479,4 @@ guard.register("menu poll loop", function()
         function() return menu.isOpen() end))
 end)
 
-guard.log("PalMiniMap 2.0.1 loaded - F5 menu, F3 show/hide, F2 corner, +/- zoom")
+guard.log("PalMiniMap 2.0.2 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
