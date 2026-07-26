@@ -4,19 +4,25 @@
 -- THE WHOLE POINT OF VERSION 2, in one paragraph:
 --
 -- The 1.x mod inherited a SceneCaptureComponent2D that re-rendered the
--- entire world from above into a render target EVERY FRAME - a second full
--- render pass, all the time - and drew its icons as StaticMeshComponents
--- attached to the actors they marked. That design produced every serious
--- bug this mod ever had: the permanent GPU cost, the FPS decay as icon
--- components piled up, and two hard crashes from dereferencing icons whose
--- target actor had been destroyed.
+-- entire world from above into a render target EVERY FRAME - a second
+-- full render pass, all the time - and drew its icons as
+-- StaticMeshComponents attached to the actors they marked. That design
+-- produced every serious bug this mod ever had: the permanent GPU cost,
+-- the FPS decay as icon components piled up, and two hard crashes from
+-- dereferencing icons whose target actor had been destroyed.
 --
 -- This file has neither. The background is the game's own world map
 -- texture drawn as ONE quad, panned by moving it inside a clipped canvas.
 -- The icons are pooled UMG Images positioned by arithmetic. Nothing is
 -- ever attached to a world actor, and no reference to one is held across
 -- a frame, so an actor dying mid-update is a non-event instead of an
--- access violation. Cost is a handful of widgets, redrawn at 10 Hz.
+-- access violation.
+--
+-- Every setter here goes through reflection, which is not free, so the
+-- update path writes only what actually CHANGED: 2.0.5 re-sent the map
+-- brush, and each icon's brush, tint and rotation, ten times a second
+-- whether or not any of them differed. Position is the only property that
+-- genuinely changes every frame.
 -- =====================================================================
 
 local guard = require("guard")
@@ -38,13 +44,17 @@ local S = {
     frame = nil, frameSlot = nil,
     viewport = nil,
     circleOverlay = nil, circleSlot = nil,
-    mapImage = nil, mapSlot = nil,
+    mapImage = nil, mapSlot = nil, mapTex = nil, mapPx = nil,
     playerIcon = nil, playerSlot = nil,
-    pool = {},              -- { image=, slot=, inUse= }
+    playerSize = nil, playerAngle = nil,
+    pool = {},              -- { image=, slot=, inUse=, tex=, tint=, angle=, size= }
     textures = {},          -- asset path -> UTexture2D
     texAttempts = {},
     visible = false,
     builtSize = nil,
+    builtPool = nil,
+    circleShown = nil, circleSize = nil,
+    mapAngle = nil,
     viewW = nil, viewH = nil,
     editMode = false,
     editBorder = nil, editSlot = nil,
@@ -52,8 +62,7 @@ local S = {
 
 -- Viewport size, remembered. applyLayout used to be called from build()
 -- with no size at all, so a negative (edge-relative) coordinate fell
--- through to the x=40 fallback and ALL FOUR corner presets collapsed onto
--- the top-left -- which is why F2 and F4 looked like they did nothing.
+-- through to the 1920x1080 fallback.
 function M.setViewport(w, h)
     if type(w) == "number" and w > 0 and type(h) == "number" and h > 0 then
         S.viewW, S.viewH = w, h
@@ -108,12 +117,19 @@ local function addToCanvas(canvas, child)
     return slot
 end
 
-local function place(slot, x, y, w, h)
+local function setPos(slot, x, y)
     if slot == nil then return end
     guard.get(function() slot:SetPosition({ X = x, Y = y }) end)
-    if w ~= nil then
-        guard.get(function() slot:SetSize({ X = w, Y = h }) end)
-    end
+end
+
+local function setSize(slot, w, h)
+    if slot == nil then return end
+    guard.get(function() slot:SetSize({ X = w, Y = h }) end)
+end
+
+local function place(slot, x, y, w, h)
+    setPos(slot, x, y)
+    if w ~= nil then setSize(slot, w, h) end
 end
 
 -- Effective zoom, folding in the two zoom modes 1.x had:
@@ -135,6 +151,10 @@ function M.effectiveZoom(cfg, speed)
     return zoom
 end
 
+local function poolCapacity(cfg)
+    return (cfg.maxPalIcons or 48) + (cfg.maxPoiIcons or 48)
+end
+
 -- ---------------------------------------------------------------
 -- Build / teardown
 -- ---------------------------------------------------------------
@@ -146,13 +166,17 @@ function M.destroy()
     end
     S.widget, S.tree = nil, nil
     S.frame, S.frameSlot, S.viewport = nil, nil, nil
-    S.mapImage, S.mapSlot = nil, nil
+    S.mapImage, S.mapSlot, S.mapTex = nil, nil, nil
+    S.mapPx, S.mapAngle = nil, nil
     S.circleOverlay, S.circleSlot = nil, nil
+    S.circleShown, S.circleSize = nil, nil
     S.editBorder, S.editSlot = nil, nil
     S.playerIcon, S.playerSlot = nil, nil
+    S.playerSize, S.playerAngle = nil, nil
     S.pool = {}
     S.visible = false
     S.builtSize = nil
+    S.builtPool = nil
 end
 
 function M.build(pc, cfg)
@@ -207,10 +231,10 @@ function M.build(pc, cfg)
     setVisible(S.mapImage, true)
 
     -- Circular shape: a real alpha mask needs a material, which we cannot
-    -- author from Lua, so the round look comes from the game's own circular
-    -- overlay drawn on top. Icons are additionally culled to the inscribed
-    -- circle in update(), so the shape is honoured even where the art is
-    -- only decorative.
+    -- author from Lua, so the round look comes from the game's own
+    -- circular overlay drawn on top. Icons are additionally culled to the
+    -- inscribed circle in update(), so the shape is honoured even where
+    -- the art is only decorative.
     S.circleOverlay = construct("/Script/UMG.Image", S.tree)
     if S.circleOverlay ~= nil then
         S.circleSlot = addToCanvas(S.viewport, S.circleOverlay)
@@ -220,12 +244,13 @@ function M.build(pc, cfg)
             guard.get(function() S.circleOverlay:SetBrushFromTexture(ctex, false) end)
         end
         setVisible(S.circleOverlay, false)
+        S.circleShown = false
     end
 
     -- icon pool: allocated once, reused forever. No allocation, no
     -- destruction and no GC churn while playing.
-    local poolSize = cfg.maxPalIcons + cfg.maxPoiIcons
-    for i = 1, poolSize do
+    local capacity = poolCapacity(cfg)
+    for _ = 1, capacity do
         local img = construct("/Script/UMG.Image", S.tree)
         if img ~= nil then
             local slot = addToCanvas(S.viewport, img)
@@ -270,6 +295,7 @@ function M.build(pc, cfg)
     guard.get(function() widget:SetRenderOpacity(cfg.opacity) end)
 
     S.builtSize = size
+    S.builtPool = capacity
     S.visible = true
     M.setEditMode(S.editMode)
     M.applyLayout(cfg)
@@ -319,13 +345,14 @@ function M.isVisible() return S.visible end
 -- ---------------------------------------------------------------
 -- Per-update drawing
 --
--- `player` = { x, y, yaw }; `marks` = list of { x, y, texture, size, tint }.
--- Callers pass plain numbers - never UObjects - so nothing here can touch
--- a dying actor.
+-- `player` = { x, y, yaw, speed }; `marks` is sources.collect()'s pooled
+-- array and `count` says how much of it is live. Callers pass plain
+-- numbers - never UObjects - so nothing here can touch a dying actor.
 -- ---------------------------------------------------------------
-function M.update(cfg, player, marks)
+function M.update(cfg, player, marks, count)
     if not M.isBuilt() or not S.visible then return end
     if type(player) ~= "table" or type(player.x) ~= "number" then return end
+    count = count or 0
 
     local size = cfg.size
     local half = size * 0.5
@@ -340,41 +367,63 @@ function M.update(cfg, player, marks)
     local imagePx = size * (spanWorld / zoom)
 
     -- background: one quad, moved so the player's point sits at the centre
-    local tex = loadTexture(MAP_TEXTURE)
-    if tex ~= nil then
-        guard.get(function() S.mapImage:SetBrushFromTexture(tex, false) end)
+    if S.mapTex == nil then
+        local tex = loadTexture(MAP_TEXTURE)
+        if tex ~= nil then
+            guard.get(function() S.mapImage:SetBrushFromTexture(tex, false) end)
+            S.mapTex = tex
+        end
     end
-    place(S.mapSlot, half - pu * imagePx, half - pv * imagePx, imagePx, imagePx)
+    setPos(S.mapSlot, half - pu * imagePx, half - pv * imagePx)
+    if S.mapPx ~= imagePx then
+        S.mapPx = imagePx
+        setSize(S.mapSlot, imagePx, imagePx)
+    end
 
     local rotate = cfg.rotateWithCamera and type(player.yaw) == "number"
     local cosA, sinA = 1.0, 0.0
+    local mapAngle = 0.0
     if rotate then
         -- rotate the image about the player's own point, not its centre
         guard.get(function()
             S.mapImage:SetRenderTransformPivot({ X = pu, Y = pv })
         end)
-        local rad = -player.yaw * math.pi / 180.0
-        guard.get(function() S.mapImage:SetRenderTransformAngle(-player.yaw) end)
+        mapAngle = -player.yaw
+        local rad = mapAngle * math.pi / 180.0
         cosA, sinA = math.cos(rad), math.sin(rad)
-    else
-        guard.get(function() S.mapImage:SetRenderTransformAngle(0.0) end)
+    end
+    if S.mapAngle ~= mapAngle then
+        S.mapAngle = mapAngle
+        guard.get(function() S.mapImage:SetRenderTransformAngle(mapAngle) end)
     end
 
     -- player marker: always centred, rotated to show facing when the map
     -- itself is not rotating
     if S.playerSlot ~= nil then
         local ps = cfg.playerIconSize
-        place(S.playerSlot, half - ps * 0.5, half - ps * 0.5, ps, ps)
-        guard.get(function()
-            S.playerIcon:SetRenderTransformAngle(rotate and 0.0 or (player.yaw or 0.0))
-        end)
+        setPos(S.playerSlot, half - ps * 0.5, half - ps * 0.5)
+        if S.playerSize ~= ps then
+            S.playerSize = ps
+            setSize(S.playerSlot, ps, ps)
+        end
+        local pa = rotate and 0.0 or (player.yaw or 0.0)
+        if S.playerAngle ~= pa then
+            S.playerAngle = pa
+            guard.get(function() S.playerIcon:SetRenderTransformAngle(pa) end)
+        end
     end
 
     -- circular shape: overlay art plus a real radius test on the icons
     local round = cfg.circular == true
     if S.circleSlot ~= nil then
-        place(S.circleSlot, 0, 0, size, size)
-        setVisible(S.circleOverlay, round)
+        if S.circleSize ~= size then
+            S.circleSize = size
+            place(S.circleSlot, 0, 0, size, size)
+        end
+        if S.circleShown ~= round then
+            S.circleShown = round
+            setVisible(S.circleOverlay, round)
+        end
     end
     local radius = half - (cfg.iconSize * 0.35)
     local radius2 = radius * radius
@@ -383,7 +432,8 @@ function M.update(cfg, player, marks)
     local used = 0
     local limit = #S.pool
     local margin = cfg.iconSize
-    for i = 1, #marks do
+    local iconAngle = (rotate and not cfg.lockIconsNorth) and player.yaw or 0.0
+    for i = 1, count do
         if used >= limit then break end
         local m = marks[i]
         local u, v = worldmap.toUV(m.x, m.y, region)
@@ -405,26 +455,34 @@ function M.update(cfg, player, marks)
                 used = used + 1
                 local entry = S.pool[used]
                 local isz = m.size or cfg.iconSize
-                place(entry.slot, half + dx - isz * 0.5, half + dy - isz * 0.5, isz, isz)
-                -- species portraits can fail to resolve (a pal whose icon
-                -- asset is not cooked under the expected name); fall back to
-                -- the generic marker rather than drawing an empty box
-                local mtex = m.texture and loadTexture(m.texture) or nil
-                if mtex == nil and m.fallback then
-                    mtex = loadTexture(m.fallback)
+                setPos(entry.slot, half + dx - isz * 0.5, half + dy - isz * 0.5)
+                if entry.size ~= isz then
+                    entry.size = isz
+                    setSize(entry.slot, isz, isz)
                 end
-                if mtex ~= nil then
+                -- species portraits can fail to resolve (a pal whose icon
+                -- asset is not cooked under the expected name); fall back
+                -- to the generic marker rather than drawing an empty box
+                local want = m.texture
+                local mtex = want and loadTexture(want) or nil
+                if mtex == nil and m.fallback then
+                    want = m.fallback
+                    mtex = loadTexture(want)
+                end
+                if mtex ~= nil and entry.tex ~= want then
+                    entry.tex = want
                     guard.get(function() entry.image:SetBrushFromTexture(mtex, false) end)
                 end
-                if m.tint ~= nil then
+                if m.tint ~= nil and entry.tint ~= m.tint then
+                    entry.tint = m.tint
                     guard.get(function() entry.image:SetColorAndOpacity(m.tint) end)
                 end
-                -- 1.x's "lock all icon rotations to north": the map may spin,
-                -- the icons should not
-                if rotate then
+                -- 1.x's "lock all icon rotations to north": the map may
+                -- spin, the icons should not
+                if entry.angle ~= iconAngle then
+                    entry.angle = iconAngle
                     guard.get(function()
-                        entry.image:SetRenderTransformAngle(
-                            cfg.lockIconsNorth and 0.0 or player.yaw)
+                        entry.image:SetRenderTransformAngle(iconAngle)
                     end)
                 end
                 if not entry.inUse then
@@ -435,7 +493,7 @@ function M.update(cfg, player, marks)
         end
     end
     -- retire the rest of the pool without destroying anything
-    for i = used + 1, #S.pool do
+    for i = used + 1, limit do
         local entry = S.pool[i]
         if entry.inUse then
             setVisible(entry.image, false)
@@ -444,8 +502,14 @@ function M.update(cfg, player, marks)
     end
 end
 
+-- A size change means the widget was built at the wrong dimensions, and
+-- a max-icon change means the pool is the wrong length. 2.0.5 only
+-- checked the size, so "Max point-of-interest icons" did nothing at all
+-- until the game was restarted.
 function M.needsRebuild(cfg)
-    return S.builtSize ~= nil and S.builtSize ~= cfg.size
+    if S.builtSize ~= nil and S.builtSize ~= cfg.size then return true end
+    if S.builtPool ~= nil and S.builtPool ~= poolCapacity(cfg) then return true end
+    return false
 end
 
 return M

@@ -73,6 +73,7 @@ local LAYOUT = {
     { key = "hideBehindGameUi",  label = "Hide behind the game's menu", kind = "bool" },
     { key = "autohideInBase",    label = "Hide while in a base camp", kind = "bool" },
     { key = "iconSize",          label = "Icon size",                kind = "int", min = 10, max = 40 },
+    { key = "playerIconSize",    label = "Player marker size",       kind = "int", min = 10, max = 48 },
 
     { header = "Pals" },
     { key = "showPals",          label = "Show pals",                kind = "bool" },
@@ -106,8 +107,11 @@ local LAYOUT = {
     -- one quad, so there is no resolution to trade away. These three are
     -- the real performance knobs now: how often the icons are repositioned,
     -- how often the world is rescanned, and how many icons may exist.
+    -- 50 ms is the floor on purpose: the single game-thread pump ticks at
+    -- 33 ms, so anything below that only adds dispatches without adding
+    -- frames. See the threading note at the top of main.lua.
     { header = "Performance" },
-    { key = "moveIntervalMs",    label = "Update rate (ms, lower = smoother)", kind = "int", min = 33, max = 500, step = 1 },
+    { key = "moveIntervalMs",    label = "Update rate (ms, lower = smoother)", kind = "int", min = 50, max = 500, step = 5 },
     { key = "scanIntervalMs",    label = "Rescan world every (ms)",  kind = "int", min = 1000, max = 20000, step = 500 },
     { key = "maxPoiIcons",       label = "Max point-of-interest icons", kind = "int", min = 8, max = 128 },
 
@@ -424,6 +428,9 @@ end
 
 function M.open(cfg, worldName)
     if S.open then return end
+    -- flush() needs a config even if poll() never got to run (a menu
+    -- opened and closed inside one poll interval)
+    M.cfg = cfg
     local pc = controller()
     if pc == nil then
         guard.log("menu not opened: no player controller")

@@ -27,7 +27,7 @@ Version 2 has neither mechanism, so neither class of bug can occur.
 | terrain | scene capture, every frame | game's `T_WorldMap` texture, one quad |
 | icons | `StaticMeshComponent` attached to actors | pooled UMG `Image` widgets |
 | icon lifetime | created/destroyed constantly | fixed pool, allocated once, reused |
-| update rate | per frame | 10 Hz movement, 0.25 Hz scan |
+| update rate | per frame | 10 Hz movement, 0.25 Hz pal scan, 15 s static scan |
 | assets shipped | a `.pak` | none |
 | packaging | Steam/Nexus `.pak` + Game Pass IoStore triplet | one identical package |
 
@@ -134,6 +134,79 @@ transform is correct, the player marker sits where it should, and the default
 axis orientation (north up) is right — the constants decoded from
 `DT_WorldMapUIData` are good, so the orientation controls are only an escape
 hatch.
+
+**Fixed in 2.0.6 — crash a few seconds into edit mode, plus a scan overhaul:**
+
+The reported failure was:
+
+```
+[Lua] [PalMiniMap] edit mode on - arrows move, +/- resize
+[UE4SS.EngineTick.LuaModImpl] Hook threw exception:
+  "[Lua::Registry::get_function_ref] Ref was not function", removing hook!
+[FCallbackGarbageCollector] Freed invalid callbacks!
+```
+
+- **Root cause: unsynchronised Lua registry traffic.** Every
+  `ExecuteInGameThread` call takes a Lua registry reference (`luaL_ref`) and the
+  engine tick releases it (`luaL_unref`) once it has run. That registry is one
+  shared, unlocked free list. 2.0.5 had **four** `LoopAsync` timer threads
+  (50 ms, 250 ms, 500 ms, 2 s) *plus* the UE4SS input thread all making
+  references into it — about 27 a second at idle. When two threads reach the
+  free list together they are handed the **same index**; one action is then
+  unref'd while the other is still queued, the engine tick reads a slot that no
+  longer holds a function, and UE4SS removes its own tick hook. That kills every
+  timer in the mod and takes the game with it. Entering edit mode and pressing
+  the arrow keys added the input thread to the mix, which is why it reproduced
+  there within seconds.
+- **The fix is structural, not another guard.** There is now **one** `LoopAsync`,
+  and it is the only thread that ever calls `ExecuteInGameThread`. It dispatches
+  only when a sub-tick is actually due, so idle cost is one dispatch every 2 s
+  instead of 27 a second.
+- **Key binds no longer touch the game thread at all.** They append a string to a
+  bounded queue — plain Lua, no reflection, no registry reference — and the pump
+  drains it. Besides taking the input thread out of the race, this removes the
+  re-entrancy hazard of appending to the engine tick's action list from inside a
+  callback that tick may itself be dispatching.
+- **`+`/`-` in edit mode never resized anything.** `zoomBy` referenced `editMode`
+  and `resize` above their `local` declarations, so both resolved to globals —
+  i.e. to `nil` — and the branch was dead. Forward-declared.
+- **Dragging the window across the screen centre teleported it.** Edit mode was
+  nudging an edge-relative coordinate (the default `x = -40`); crossing zero
+  flipped its meaning from "40 from the right edge" to "40 from the left edge".
+  Edit mode now works in absolute units and converts back to edge-relative for
+  the nearer edge on exit, so a saved layout still survives a resolution change.
+- **The world scan cost roughly four times less.** Every `FindAllOf` is a full
+  walk of the UObject array; 2.0.5 did fourteen of them every four seconds.
+  Statics (chests, dungeons, fast travel…) do not move, so they are rescanned on
+  a 15 s floor or when the player has actually travelled somewhere new, while
+  pals stay on the 4 s tick. The scan radius also follows the zoom actually in
+  use instead of always using the 260 000-unit megazoom radius.
+- **The point-of-interest budget went to whatever was scanned first.** In a
+  chest-heavy area the 48 slots filled with chests and fast travel points and
+  dungeons never appeared. Candidates are now distance-sorted, so the budget
+  always goes to the nearest markers whatever kind they are.
+- **The player was drawn twice, and NPCs were drawn as pals.**
+  `PalPlayerCharacter` and `PalNPC` both derive from `PalCharacter`, so
+  `FindAllOf("PalCharacter")` returned the local player, every other player and
+  every human NPC as well — a duplicate marker sat permanently under the player
+  arrow. They are excluded by actor name now.
+- **"Max point-of-interest icons" did nothing until a restart** — `needsRebuild`
+  only compared the window size, never the icon pool length.
+- **F2 always jumped to the top-left first**, because the corner cycle started
+  from index 1 regardless of where the saved layout already was.
+- **Settings were rewritten on every key press.** Zoom steps and edit-mode
+  nudges each did a blocking file write on the game thread; writes are now
+  coalesced to at most one a second.
+- **The per-frame draw only writes what changed.** 2.0.5 re-sent the map brush,
+  and every icon's brush, tint and rotation, ten times a second whether or not
+  any of them differed; only position genuinely changes every frame. The draw
+  list is pooled too, so ~100 tables a tick no longer go to the collector.
+- Resizing (menu slider or `+`/`-` in edit mode) rebuilds immediately instead of
+  leaving the minimap missing until the next 2 s maintenance tick.
+- The two remaining `FindAllOf` searches that can legitimately find nothing —
+  the Esc-menu widget and the map-bounds calibration widget — now back off
+  (10 s / 20 s) instead of running a full object-array walk on every tick
+  forever.
 
 **Fixed in 2.0.5 — the config window sat off the right-hand edge:**
 

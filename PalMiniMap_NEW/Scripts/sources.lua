@@ -15,12 +15,21 @@
 --     /Game/Pal/Texture/PalIcon/Normal/T_<Tribe>_icon_normal
 -- That is how 137 species icons come for free with nothing shipped.
 --
--- CRASH SAFETY, unchanged from 2.0.0: static marks (everything that does
--- not move) have their coordinates read ONCE at scan time and are then
--- plain numbers - their actor is never touched again. Only pals, players
--- and NPCs are re-read per frame, and that read is validate-then-
--- GetActorLocation on the actor itself, never a walk to an attach parent
--- or owner, which is where both 1.x crashes actually happened.
+-- CRASH SAFETY: static marks (everything that does not move) have their
+-- coordinates read ONCE at scan time and are then plain numbers - their
+-- actor is never touched again. Only pals, players and NPCs are re-read
+-- per frame, and that read is validate-then-GetActorLocation on the actor
+-- itself, never a walk to an attach parent or owner, which is where both
+-- 1.x crashes actually happened.
+--
+-- COST: every FindAllOf is a full walk of the UObject array, and Palworld
+-- keeps a lot of objects. 2.0.5 did fourteen of those walks every four
+-- seconds, which is the frame-time spike people described as "stutter
+-- every few seconds". The scan is now split:
+--   * scanDynamic  - pals, players, NPCs. They move, so 4 s (configurable).
+--   * scanStatic   - chests, dungeons, fast travel... They do not move, so
+--                    it runs on a 15 s floor and whenever the player has
+--                    actually travelled somewhere new (see main.lua).
 -- =====================================================================
 
 local guard = require("guard")
@@ -79,7 +88,8 @@ local STATIC_KINDS = {
 
 local S = {
     pals = {}, players = {}, npcs = {},
-    static = {},
+    static = {},            -- { x, y, kind } sorted by distance at scan time
+    camps  = {},            -- { x, y } base camp points, for the autohide
     lastScan = 0.0,
     reported = {},
     campNear = false,
@@ -169,74 +179,150 @@ local function dist2(ax, ay, bx, by)
     return dx * dx + dy * dy
 end
 
--- ---------------------------------------------------------------
--- scan
--- ---------------------------------------------------------------
-function M.scan(cfg, px, py, playerChar)
-    local radius = math.max(cfg.zoom, cfg.megazoom) * 0.75
-    local maxD2 = radius * radius
+local function byDistance(l, r) return l.d < r.d end
 
-    S.pals, S.players, S.npcs, S.static = {}, {}, {}, {}
-    S.campNear = false
+-- How far out to keep things, from the zoom actually in use. 2.0.5 always
+-- used max(zoom, megazoom) - i.e. the 260 000 unit megazoom radius even
+-- while zoomed all the way in - so every scan sorted and kept hundreds of
+-- actors that could never be on screen.
+local function keepRadius2(zoom)
+    local r = (zoom or 22000) * 0.85
+    if r < 8000 then r = 8000 end
+    return r * r
+end
+
+-- ---------------------------------------------------------------
+-- dynamic scan: pals, players, NPCs
+-- ---------------------------------------------------------------
+local nearScratch = {}
+
+function M.scanDynamic(cfg, px, py, zoom, playerPawn)
+    local maxD2 = keepRadius2(zoom)
+
+    S.pals, S.players, S.npcs = {}, {}, {}
+
+    -- PalPlayerCharacter and PalNPC both derive from PalCharacter, so a
+    -- plain FindAllOf("PalCharacter") returns the local player, every
+    -- other player and every human NPC as well. 2.0.5 drew all of them as
+    -- pals - which is the duplicate marker sitting permanently under the
+    -- player arrow - so they are collected first and then excluded by
+    -- name (actor names are unique within a level, and identity comparison
+    -- on reflected UObjects is not reliable across calls).
+    local excluded = nil
+    local function exclude(actor)
+        local n = actorName(actor)
+        if n ~= nil then
+            excluded = excluded or {}
+            excluded[n] = true
+        end
+        return n
+    end
+
+    -- The local player is drawn by the centred player marker, so it must
+    -- not also come back as an "other player": 2.0.5 stacked a second
+    -- icon underneath the arrow, permanently.
+    local selfName = playerPawn ~= nil and exclude(playerPawn) or nil
+
+    if cfg.showPlayers or cfg.showPals then
+        local all = findAll("PalPlayerCharacter", "players")
+        for i = 1, #all do
+            local a = all[i]
+            local n = exclude(a)
+            if cfg.showPlayers and n ~= selfName then
+                S.players[#S.players + 1] = a
+            end
+        end
+    end
+
+    if cfg.showNPCs or cfg.showPals then
+        local all = findAll("PalNPC", "NPC humans")
+        for i = 1, #all do
+            local a = all[i]
+            exclude(a)
+            if cfg.showNPCs then
+                local x, y = actorLocation(a)
+                if x ~= nil and dist2(x, y, px, py) <= maxD2 then
+                    S.npcs[#S.npcs + 1] = a
+                end
+            end
+        end
+    end
 
     if cfg.showPals then
         local all = findAll("PalCharacter", "pals")
-        local near = {}
+        local near, n = nearScratch, 0
         for i = 1, #all do
             local a = all[i]
-            local x, y = actorLocation(a)
-            if x ~= nil then
-                local d = dist2(x, y, px, py)
-                if d <= maxD2 then near[#near + 1] = { actor = a, d = d } end
+            local name = actorName(a)
+            if name ~= nil and not (excluded and excluded[name]) then
+                local x, y = actorLocation(a)
+                if x ~= nil then
+                    local d = dist2(x, y, px, py)
+                    if d <= maxD2 then
+                        n = n + 1
+                        local slot = near[n]
+                        if slot == nil then slot = {}; near[n] = slot end
+                        slot.actor, slot.d, slot.name = a, d, name
+                    end
+                end
             end
         end
-        table.sort(near, function(l, r) return l.d < r.d end)
-        for i = 1, #near do
-            if #S.pals >= cfg.maxPalIcons then break end
+        -- table.sort only sees the live prefix
+        for i = #near, n + 1, -1 do near[i] = nil end
+        table.sort(near, byDistance)
+        local limit = cfg.maxPalIcons
+        for i = 1, n do
+            if #S.pals >= limit then break end
             local a = near[i].actor
             local shiny = isShiny(a)
             if (not cfg.onlyShinyPals) or shiny then
                 S.pals[#S.pals + 1] = {
-                    actor = a, tribe = tribeOf(actorName(a)),
-                    shiny = shiny, friend = isFriend(a, playerChar),
+                    actor = a, tribe = tribeOf(near[i].name),
+                    shiny = shiny, friend = isFriend(a, playerPawn),
                 }
             end
         end
+        -- do not keep actor references alive in the scratch table
+        for i = 1, n do near[i].actor = nil end
     end
 
-    if cfg.showPlayers then
-        local all = findAll("PalPlayerCharacter", "players")
-        for i = 1, #all do S.players[#S.players + 1] = all[i] end
-    end
+    S.lastScan = os.clock()
+end
 
-    if cfg.showNPCs then
-        local all = findAll("PalNPC", "NPC humans")
-        for i = 1, #all do
-            local x, y = actorLocation(all[i])
-            if x ~= nil and dist2(x, y, px, py) <= maxD2 then
-                S.npcs[#S.npcs + 1] = all[i]
-            end
-        end
-    end
+-- ---------------------------------------------------------------
+-- static scan: everything that does not move
+-- ---------------------------------------------------------------
+local staticScratch = {}
 
-    local campRadius2 = cfg.baseCampRadius * cfg.baseCampRadius
+function M.scanStatic(cfg, px, py, zoom)
+    local maxD2 = keepRadius2(zoom)
+    local wantCamps = cfg.showBaseCamps or cfg.autohideInBase
+
+    local found, n = staticScratch, 0
+    S.camps = {}
+
     for _, spec in ipairs(STATIC_KINDS) do
-        if cfg[spec.cfg] or spec.kind == "camp" then
+        local wanted = cfg[spec.cfg] == true
+        if wanted or (spec.kind == "camp" and wantCamps) then
             local all = findAll(spec.class, spec.kind)
             for i = 1, #all do
-                if #S.static >= cfg.maxPoiIcons then break end
                 local a = all[i]
                 local x, y = actorLocation(a)
                 if x ~= nil then
-                    local d = dist2(x, y, px, py)
-                    if spec.kind == "camp" and d <= campRadius2 then
-                        S.campNear = true   -- drives "autohide inside base camps"
+                    if spec.kind == "camp" and wantCamps then
+                        S.camps[#S.camps + 1] = { x = x, y = y }
                     end
-                    if d <= maxD2 and cfg[spec.cfg] then
-                        local skip = cfg.hideCollected and spec.collectible
-                                     and alreadyCollected(a)
-                        if not skip then
-                            S.static[#S.static + 1] = { x = x, y = y, kind = spec.kind }
+                    if wanted then
+                        local d = dist2(x, y, px, py)
+                        if d <= maxD2 then
+                            local skip = cfg.hideCollected and spec.collectible
+                                         and alreadyCollected(a)
+                            if not skip then
+                                n = n + 1
+                                local slot = found[n]
+                                if slot == nil then slot = {}; found[n] = slot end
+                                slot.x, slot.y, slot.kind, slot.d = x, y, spec.kind, d
+                            end
                         end
                     end
                 end
@@ -244,7 +330,34 @@ function M.scan(cfg, px, py, playerChar)
         end
     end
 
-    S.lastScan = os.clock()
+    -- 2.0.5 stopped as soon as maxPoiIcons was reached, in table order, so
+    -- a chest-heavy area used the whole budget on chests and fast travel
+    -- points and dungeons never appeared at all. Sorting by distance first
+    -- means the budget always goes to the nearest markers, whatever kind
+    -- they are.
+    for i = #found, n + 1, -1 do found[i] = nil end
+    table.sort(found, byDistance)
+
+    local limit = math.min(n, cfg.maxPoiIcons)
+    local out = {}
+    for i = 1, limit do
+        out[i] = { x = found[i].x, y = found[i].y, kind = found[i].kind }
+    end
+    S.static = out
+end
+
+-- Base camp proximity is recomputed from the stored camp positions on
+-- every dynamic scan: the camps do not move, but the player does.
+function M.updateProximity(cfg, px, py)
+    if not cfg.autohideInBase then S.campNear = false; return end
+    local r2 = cfg.baseCampRadius * cfg.baseCampRadius
+    for i = 1, #S.camps do
+        if dist2(S.camps[i].x, S.camps[i].y, px, py) <= r2 then
+            S.campNear = true
+            return
+        end
+    end
+    S.campNear = false
 end
 
 function M.insideBaseCamp() return S.campNear end
@@ -252,65 +365,81 @@ function M.lastScanAt() return S.lastScan end
 
 -- ---------------------------------------------------------------
 -- draw list
+--
+-- Called at the movement rate (10 Hz by default), so it must not
+-- allocate: the mark tables are pooled and refilled in place, and the
+-- caller is handed the pool plus a count instead of a fresh array. At 96
+-- icons that is ~100 tables saved from the collector every 100 ms.
 -- ---------------------------------------------------------------
+local markPool = {}
+
+local function emit(n, x, y, tex, size, tint, fallback, isPal)
+    n = n + 1
+    local m = markPool[n]
+    if m == nil then m = {}; markPool[n] = m end
+    m.x, m.y = x, y
+    m.texture, m.fallback = tex, fallback
+    m.size, m.tint, m.isPal = size, tint, isPal
+    return n
+end
+
 function M.collect(cfg)
-    local marks = {}
+    local n = 0
+    local isz = cfg.iconSize
 
     for i = 1, #S.static do
         local s = S.static[i]
-        marks[#marks + 1] = {
-            x = s.x, y = s.y,
-            texture = ICON[s.kind] or ICON.member,
-            size = cfg.iconSize,
-            tint = TINT[s.kind] or WHITE,
-        }
+        n = emit(n, s.x, s.y, ICON[s.kind] or ICON.member, isz,
+                 TINT[s.kind] or WHITE, ICON.member, false)
     end
 
-    for i = 1, #S.pals do
-        local p = S.pals[i]
-        local x, y = actorLocation(p.actor)
-        if x ~= nil then
-            local tex, tint = ICON.member, (p.friend and TINT.friend or WHITE)
-            if p.tribe then
-                tex = string.format(PAL_ICON_FMT, p.tribe, p.tribe)
-                -- a species portrait is already full colour; only shiny
-                -- gets a highlight (and the size bump below)
-                tint = p.shiny and TINT.shiny or WHITE
-            elseif p.shiny then
-                tint = TINT.shiny
+    -- while megazoomed, pal icons are optional (1.x: "show pal icons while
+    -- megazoomed out") - they turn into noise at region scale
+    local withPals = not (cfg.megazoomActive and not cfg.palsWhileMegazoom)
+    if withPals then
+        for i = 1, #S.pals do
+            local p = S.pals[i]
+            local x, y = actorLocation(p.actor)
+            if x ~= nil then
+                local tex, tint = ICON.member, (p.friend and TINT.friend or WHITE)
+                if p.tribe then
+                    tex = string.format(PAL_ICON_FMT, p.tribe, p.tribe)
+                    -- a species portrait is already full colour; only shiny
+                    -- gets a highlight (and the size bump below)
+                    tint = p.shiny and TINT.shiny or WHITE
+                elseif p.shiny then
+                    tint = TINT.shiny
+                end
+                n = emit(n, x, y, tex, p.shiny and (isz + 4) or isz,
+                         tint, ICON.member, true)
             end
-            marks[#marks + 1] = {
-                x = x, y = y, texture = tex, fallback = ICON.member,
-                size = p.shiny and (cfg.iconSize + 4) or cfg.iconSize,
-                tint = tint,
-                isPal = true,   -- lets megazoom drop pal icons (1.x option)
-            }
         end
     end
 
     for i = 1, #S.players do
         local x, y = actorLocation(S.players[i])
         if x ~= nil then
-            marks[#marks + 1] = { x = x, y = y, texture = ICON.member,
-                                  size = cfg.iconSize, tint = TINT.player }
+            n = emit(n, x, y, ICON.member, isz, TINT.player, nil, false)
         end
     end
 
     for i = 1, #S.npcs do
         local x, y = actorLocation(S.npcs[i])
         if x ~= nil then
-            marks[#marks + 1] = { x = x, y = y, texture = ICON.member,
-                                  size = cfg.iconSize, tint = TINT.npc }
+            n = emit(n, x, y, ICON.member, isz, TINT.npc, nil, false)
         end
     end
 
-    return marks
+    return markPool, n
 end
 
 function M.forget()
-    S.pals, S.players, S.npcs, S.static = {}, {}, {}, {}
+    S.pals, S.players, S.npcs = {}, {}, {}
+    S.static, S.camps = {}, {}
     S.campNear = false
     S.lastScan = 0.0
+    -- drop the actor references the pools would otherwise keep alive
+    for i = 1, #nearScratch do nearScratch[i].actor = nil end
 end
 
 return M

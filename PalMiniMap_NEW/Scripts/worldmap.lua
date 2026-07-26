@@ -114,7 +114,26 @@ end
 -- Best-effort and quiet: the widget usually is NOT loaded, and that is
 -- fine, so a failure here is never logged as an error.
 -- ---------------------------------------------------------------
+-- FindAllOf walks the whole UObject array. The map widget only exists
+-- once the player has opened the world map, so on a fresh session this
+-- search fails forever - 2.0.5 retried it on every 2 s maintenance tick,
+-- i.e. a full object-array walk twice a minute for nothing. Back off to
+-- one attempt every 20 s and give up entirely after a few minutes; the
+-- shipped bounds are correct anyway, calibration only guards against a
+-- future game update moving them.
+local CALIBRATE_RETRY = 20.0
+local CALIBRATE_TRIES = 12
 local calibrated = false
+local calibrateTries = 0
+local calibrateAt = 0.0
+
+-- A level transition can bring in a different map; allow one more round
+-- of attempts when the world changes.
+function M.recalibrate()
+    calibrated = false
+    calibrateTries = 0
+    calibrateAt = 0.0
+end
 
 local function vecOf(value)
     if value == nil then return nil end
@@ -126,6 +145,11 @@ end
 
 function M.calibrate()
     if calibrated then return true end
+    if calibrateTries >= CALIBRATE_TRIES then return false end
+    local now = os.clock()
+    if now < calibrateAt then return false end
+    calibrateAt = now + CALIBRATE_RETRY
+    calibrateTries = calibrateTries + 1
     local widgets = guard.get(FindAllOf, "WBP_Map_Body_C")
     if type(widgets) ~= "table" then return false end
     for _, w in ipairs(widgets) do
