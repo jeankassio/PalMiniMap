@@ -52,6 +52,31 @@ UNINSTALL
 Delete the files listed above (and the two PalMiniMap folders).
 
 ===================================================================
+WHAT'S NEW IN v1.2.5
+===================================================================
+- Fixes the FPS decay when you stay in one area for a long time, and the
+  occasional crash on alt-tab that came with it.
+  Cause: the pal icon list is the only one the minimap blueprint never
+  rebuilds by itself. A pal that simply despawns leaves its icon in that
+  list forever, and every per-frame icon loop keeps walking it, so the
+  cost climbs the longer a level stays loaded (a loading-screen fast
+  travel resets it - which is exactly what players reported).
+  The janitor that caps that list was silently doing nothing on some
+  UE4SS builds: it assumed the list had been cleared without ever
+  checking, then destroyed icons the blueprint was still using. It now
+  proves the list is empty first, falls back to another method when the
+  engine call is unsupported, and only destroys icons once they are
+  provably unreferenced.
+- The icon count is checked every 10 seconds instead of every 30, so a
+  busy area no longer sits far above the cap between passes.
+- Icons that cannot be removed are now fully switched off (render and
+  tick) instead of only hidden.
+- The config menu no longer refuses to open after a transient hiccup, and
+  it now writes the reason to UE4SS.log whenever it does refuse.
+- New "icon census" line in UE4SS.log every 5 minutes - please include it
+  in any performance report.
+
+===================================================================
 WHAT'S NEW IN v1.2.2
 ===================================================================
 - Fixes a crash after several minutes of play. When an item was collected

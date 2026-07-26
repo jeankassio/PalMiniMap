@@ -39,7 +39,7 @@ local BACKUP_PATH = SCRIPT_DIRECTORY and (SCRIPT_DIRECTORY .. "/../user_settings
 -- updates. New keys from future versions are merged in while preserving
 -- the user's values.
 local DEFAULTS_JSON = [==[
-{"note":"THIS JSON FILE WAS CREATED USING THE `DekModConfigMenu` MOD FOR PALWORLD! DO NOT MANUALLY EDIT THIS FILE UNLESS YOU KNOW WHAT YOU'RE DOING -- USE THE `DekModConfigMenu` MOD INSTEAD <3","meta":{"game":false,"vers":"1.2.3","auth":"T3R3NC3B","desc":"PalMiniMap (based on Paldar by T3R3NC3B) - a minimap radar that displays live pal positions and more. Updated for Palworld 1.0 By Jean Kassio.","link":{"nexus-mod-id":"879","curse-slug":"blueprint-code-mods/paldar-mini-map-radar","donate":""}},"General Settings":{"type":"header","desc":"Configure general settings."},"Enable mod":{"type":"boolean","desc":"Enable/disable the entire Paldar mod.","init":true,"live":true},"Minimap render resolution":{"type":"integer","desc":"Lower numbers for better performance, at the cost of quality.","flag":"","opts":{"min":32,"max":2048,"step":1},"init":512,"live":512},"Minimap opacity":{"type":"integer","desc":"Adjust transparency of the whole minimap.","flag":"","opts":{"min":1,"max":100,"step":1},"init":100,"live":100},"Minimap shape":{"type":"option","desc":"Change minimap shape to circular or square.","opts":["Circle","Square"],"init":"Square","live":"Square"},"Minimap autozoom while moving":{"type":"boolean","desc":"Auto zoom out minimap to different levels when walking, running & flying.","init":true,"live":true},"Minimap rotation lock":{"type":"boolean","desc":"Lock minimap rotation to north, player icon rotates instead.","init":false,"live":false},"Lock all icon rotations to north":{"type":"boolean","desc":"Locks all icons (excluding pals & NPCs) to be upright (north).","init":false,"live":false},"Autohide minimap while in base camps":{"type":"boolean","desc":"Hide minimap while in player base camps.","init":false,"live":false},"Hide collected items from minimap":{"type":"boolean","desc":"Remove chest, egg, note and lifmunk effigy icons from the minimap once you collect them (they disappear from the world).","init":true,"live":true},"Pal Locations":{"type":"header","desc":"Configure settings for displaying Pals."},"Show pal positions":{"type":"boolean","desc":"Show Pals around the player on the minimap.","init":true,"live":true},"Only show shiny pals":{"type":"boolean","desc":"Only shows shiny Pals around the player on the minimap.","init":false,"live":false},"Show pal icons while megazoomed out":{"type":"boolean","desc":"Keep Pal icons visible on the minimap while in megazoomed out mode.","init":false,"live":false},"NPCs and Points of Interest":{"type":"header","desc":"Customize display settings for NPCs and points of interest."},"Show NPC humans":{"type":"boolean","desc":"Show NPC humans on the minimap.","init":true,"live":true},"Show player base camps":{"type":"boolean","desc":"Show player base camps on the minimap.","init":true,"live":true},"Show player death locations":{"type":"boolean","desc":"Show player death locations on the minimap.","init":true,"live":true},"Show other players":{"type":"boolean","desc":"Show other players around the player on the minimap.","init":true,"live":true},"Show dungeons":{"type":"boolean","desc":"Show dungeon locations on the minimap.","init":true,"live":true},"Chests, Notes, and Other":{"type":"header","desc":"Customize display settings for chests, notes, and other entities."},"Show chests":{"type":"boolean","desc":"Show chests around the player on the minimap.","init":true,"live":true},"Show notes":{"type":"boolean","desc":"Show notes around the player on the minimap.","init":true,"live":true},"Show eggs":{"type":"boolean","desc":"Show eggs around the player on the minimap.","init":true,"live":true},"Show fast travel points":{"type":"boolean","desc":"Show fast travel points on the minimap.","init":true,"live":true},"Show skillfruit trees":{"type":"boolean","desc":"Show skillfruit trees around the player on the minimap.","init":true,"live":true},"Show lifmunk effigies":{"type":"boolean","desc":"Show Lifmunk Effigies around the player on the minimap.","init":false,"live":false},"Scan Frequencies":{"type":"header","desc":"Adjust scanning frequencies for various entities."},"Pal rescan rate":{"type":"integer","desc":"How often the radar will scan for new Pals around the player. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":5,"live":5},"Players rescan frequency":{"type":"integer","desc":"How often the radar will scan for NEW players (not refresh rate of current players). In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":12,"live":12},"Human NPC rescan frequency":{"type":"integer","desc":"How often the radar will scan for NPC humans around the player on the minimap. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":19,"live":19},"Chest rescan frequency":{"type":"integer","desc":"How often the radar will scan for chests around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Egg rescan frequency":{"type":"integer","desc":"How often the radar will scan for eggs around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Keybinds":{"type":"header","desc":"Customize keyboard shortcuts."},"Megazoom mode toggle keybind":{"type":"keybind","desc":"Set keybind for megazoom out mode toggle. Hold this key and press + or - to fine-zoom the minimap.","init":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Cycle default minimap positions keybind":{"type":"keybind","desc":"Set keybind for cycling between default minimap positions.","init":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Show/hide minimap toggle keybind":{"type":"keybind","desc":"Show/hide minimap toggle keyboard button.","init":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Customize minimap keybind":{"type":"keybind","desc":"Set keybind to enter customization mode - move with arrow keys, resize with + and - keys.","init":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Use new minimap edit mode size method":{"type":"boolean","desc":"ON: resize minimap in edit mode with mouse scroll wheel (BROKEN on Palworld 1.0). OFF (default): resize with + and - keys (also 9 and 0).","init":false,"live":false},"Minimap capture LOD bias":{"type":"integer","desc":"Renders the minimap terrain with cheaper detail levels. 1 = original, higher = faster. Barely visible on the small map.","flag":"","opts":{"min":1,"max":8,"step":1},"init":3,"live":3}}
+{"note":"THIS JSON FILE WAS CREATED USING THE `DekModConfigMenu` MOD FOR PALWORLD! DO NOT MANUALLY EDIT THIS FILE UNLESS YOU KNOW WHAT YOU'RE DOING -- USE THE `DekModConfigMenu` MOD INSTEAD <3","meta":{"game":false,"vers":"1.2.5","auth":"T3R3NC3B","desc":"PalMiniMap (based on Paldar by T3R3NC3B) - a minimap radar that displays live pal positions and more. Updated for Palworld 1.0 By Jean Kassio.","link":{"nexus-mod-id":"879","curse-slug":"blueprint-code-mods/paldar-mini-map-radar","donate":""}},"General Settings":{"type":"header","desc":"Configure general settings."},"Enable mod":{"type":"boolean","desc":"Enable/disable the entire Paldar mod.","init":true,"live":true},"Minimap render resolution":{"type":"integer","desc":"Lower numbers for better performance, at the cost of quality.","flag":"","opts":{"min":32,"max":2048,"step":1},"init":512,"live":512},"Minimap opacity":{"type":"integer","desc":"Adjust transparency of the whole minimap.","flag":"","opts":{"min":1,"max":100,"step":1},"init":100,"live":100},"Minimap shape":{"type":"option","desc":"Change minimap shape to circular or square.","opts":["Circle","Square"],"init":"Square","live":"Square"},"Minimap autozoom while moving":{"type":"boolean","desc":"Auto zoom out minimap to different levels when walking, running & flying.","init":true,"live":true},"Minimap rotation lock":{"type":"boolean","desc":"Lock minimap rotation to north, player icon rotates instead.","init":false,"live":false},"Lock all icon rotations to north":{"type":"boolean","desc":"Locks all icons (excluding pals & NPCs) to be upright (north).","init":false,"live":false},"Autohide minimap while in base camps":{"type":"boolean","desc":"Hide minimap while in player base camps.","init":false,"live":false},"Hide collected items from minimap":{"type":"boolean","desc":"Remove chest, egg, note and lifmunk effigy icons from the minimap once you collect them (they disappear from the world).","init":true,"live":true},"Pal Locations":{"type":"header","desc":"Configure settings for displaying Pals."},"Show pal positions":{"type":"boolean","desc":"Show Pals around the player on the minimap.","init":true,"live":true},"Only show shiny pals":{"type":"boolean","desc":"Only shows shiny Pals around the player on the minimap.","init":false,"live":false},"Show pal icons while megazoomed out":{"type":"boolean","desc":"Keep Pal icons visible on the minimap while in megazoomed out mode.","init":false,"live":false},"NPCs and Points of Interest":{"type":"header","desc":"Customize display settings for NPCs and points of interest."},"Show NPC humans":{"type":"boolean","desc":"Show NPC humans on the minimap.","init":true,"live":true},"Show player base camps":{"type":"boolean","desc":"Show player base camps on the minimap.","init":true,"live":true},"Show player death locations":{"type":"boolean","desc":"Show player death locations on the minimap.","init":true,"live":true},"Show other players":{"type":"boolean","desc":"Show other players around the player on the minimap.","init":true,"live":true},"Show dungeons":{"type":"boolean","desc":"Show dungeon locations on the minimap.","init":true,"live":true},"Chests, Notes, and Other":{"type":"header","desc":"Customize display settings for chests, notes, and other entities."},"Show chests":{"type":"boolean","desc":"Show chests around the player on the minimap.","init":true,"live":true},"Show notes":{"type":"boolean","desc":"Show notes around the player on the minimap.","init":true,"live":true},"Show eggs":{"type":"boolean","desc":"Show eggs around the player on the minimap.","init":true,"live":true},"Show fast travel points":{"type":"boolean","desc":"Show fast travel points on the minimap.","init":true,"live":true},"Show skillfruit trees":{"type":"boolean","desc":"Show skillfruit trees around the player on the minimap.","init":true,"live":true},"Show lifmunk effigies":{"type":"boolean","desc":"Show Lifmunk Effigies around the player on the minimap.","init":false,"live":false},"Scan Frequencies":{"type":"header","desc":"Adjust scanning frequencies for various entities."},"Pal rescan rate":{"type":"integer","desc":"How often the radar will scan for new Pals around the player. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":5,"live":5},"Players rescan frequency":{"type":"integer","desc":"How often the radar will scan for NEW players (not refresh rate of current players). In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":12,"live":12},"Human NPC rescan frequency":{"type":"integer","desc":"How often the radar will scan for NPC humans around the player on the minimap. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":19,"live":19},"Chest rescan frequency":{"type":"integer","desc":"How often the radar will scan for chests around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Egg rescan frequency":{"type":"integer","desc":"How often the radar will scan for eggs around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Keybinds":{"type":"header","desc":"Customize keyboard shortcuts."},"Megazoom mode toggle keybind":{"type":"keybind","desc":"Set keybind for megazoom out mode toggle. Hold this key and press + or - to fine-zoom the minimap.","init":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Cycle default minimap positions keybind":{"type":"keybind","desc":"Set keybind for cycling between default minimap positions.","init":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Show/hide minimap toggle keybind":{"type":"keybind","desc":"Show/hide minimap toggle keyboard button.","init":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Customize minimap keybind":{"type":"keybind","desc":"Set keybind to enter customization mode - move with arrow keys, resize with + and - keys.","init":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Use new minimap edit mode size method":{"type":"boolean","desc":"ON: resize minimap in edit mode with mouse scroll wheel (BROKEN on Palworld 1.0). OFF (default): resize with + and - keys (also 9 and 0).","init":false,"live":false},"Minimap capture LOD bias":{"type":"integer","desc":"Renders the minimap terrain with cheaper detail levels. 1 = original, higher = faster. Barely visible on the small map.","flag":"","opts":{"min":1,"max":8,"step":1},"init":3,"live":3}}
 ]==]
 
 -- The stock blueprint reads these four keybind entries from the modconfig
@@ -96,6 +96,29 @@ local ZOOM_STEP = 500.0           -- zoom change per +/- key press
 local ZOOM_MIN, ZOOM_MAX = -7500.0, 15000.0
 local ICON_SOFT_CAP = 80          -- above this many pal icons, force a reset
 local CAMP_RESET_SECONDS = 120    -- periodic icon reset while inside a base camp (increased from 90s)
+
+-- WHY THE PAL ICON ARRAY IS THE ONE THAT LEAKS (verified against the decompiled
+-- blueprint in _tools/ModActor.patched.json):
+--   * every OTHER icon array is rebuilt from scratch by the blueprint itself --
+--     each rescan runs a "destroy every component, then Array_Clear" loop
+--     (mapIcon_CHESTS, eggicons, notesIcons, EffigyIcons, NPCHumanIcons,
+--     DungeonIcons, deathIcons, mapIcon_PLAYERS, fastTravelPointIcons);
+--   * SkillFruitTreeIcons / playerCampIcons / enemyCampIcons are never cleared,
+--     but they are only ever filled ONCE (the one-shot StartMultiScan chain), so
+--     they cannot grow;
+--   * palIconMapSMs / trackedPals / monsterMapIDs are the exception: the pal
+--     scan re-runs every few seconds, dedupes with Array_Contains(monsterMapIDs)
+--     and only ever calls Array_Remove on the KILLED-OR-CAPTURED path. A pal that
+--     simply despawns (wanders off, streaming unload, server cull) leaves its
+--     icon component in the array FOREVER.
+-- So the array grows for as long as the level stays loaded, and every one of the
+-- blueprint's per-frame icon loops (rotation lock, visibility, zoom modes) walks
+-- it. That is the reported "lag climbs the longer you stay, a loading-screen
+-- teleport resets it" -- a teleport destroys the actor and the array with it.
+-- Bounding this array is therefore the whole job of the janitor below.
+local COUNT_CHECK_MS = 10000      -- cheap pass: just reads 3 array lengths
+local ORPHAN_WALK_EVERY = 9       -- full orphan walk every Nth cheap pass (~90 s)
+local CENSUS_SECONDS = 300        -- how often to log the icon census (diagnostics)
 -- Anti-churn tuning: earlier builds reset the icon arrays on every janitor
 -- pass whenever the counts disagreed. On UE4SS builds where TArray:Empty()
 -- is a no-op (some users) the counts never actually change, so the reset
@@ -258,6 +281,7 @@ end
 -- same file - concurrent re-reads can hit a partial read)
 -- ---------------------------------------------------------------
 local configCache = nil
+local lastGoodConfig = nil   -- survives a failed re-read so the menu can still open
 
 local function readConfig()
     if configCache then return configCache end
@@ -275,6 +299,7 @@ local function readConfig()
         return nil
     end
     configCache = cfg
+    lastGoodConfig = cfg
     return cfg
 end
 
@@ -538,15 +563,13 @@ local worldName = ""             -- current world; updated by the world tick loo
 
 -- Destroying a component while the blueprint's arrays still reference it is
 -- the v1.2.2 use-after-free, so the reset runs in the only safe order:
--- 1) collect the live components into a Lua table, 2) Empty() the tracking
+-- 1) collect the live components into a Lua table, 2) clear the tracking
 -- arrays, 3) destroy the collected components ONLY if the arrays really
--- cleared (we still hold references; the blueprint no longer does). When
--- Empty() is unsupported nothing is destroyed at all — a dangling entry left
--- in the array would crash natively on the next ForEach.
-local function collectIconComponents(actor)
+-- cleared (we still hold references; the blueprint no longer does).
+local function collectIconComponents(actor, arrName)
     local comps = {}
     pcall(function()
-        actor.palIconMapSMs:ForEach(function(_, elem)
+        actor[arrName]:ForEach(function(_, elem)
             pcall(function()
                 local comp = elem:get()
                 if comp and comp:IsValid() then
@@ -558,21 +581,81 @@ local function collectIconComponents(actor)
     return comps
 end
 
+-- Empty an array property and PROVE it worked.
+--
+-- v1.2.4 and earlier only checked that `arr:Empty()` did not raise, which is a
+-- much weaker claim than "the array is now empty": on a UE4SS build where
+-- Empty() runs but does nothing, the old code went on to destroy every
+-- component while the blueprint still held them -- the intermittent
+-- "alt-tab and it crashes" report. And on builds where Empty() is missing
+-- entirely the call raised, resets were disabled forever, and the pal icon
+-- array then grew without any bound at all -- the progressive lag report.
+-- Both failure modes now end in an honest, logged answer.
+--
+-- Returns true  = the array exists and is now empty (safe to destroy)
+--         false = the array exists but could not be cleared (destroy NOTHING)
+--         nil   = the property is not on this blueprint (ignore it)
+local function countOf(actor, name)
+    local n = nil
+    pcall(function() n = arrayNum(actor[name]) end)
+    return n
+end
+
+local clearStrategyLogged = false
+
+local function clearArrayVerified(actor, name)
+    local before = countOf(actor, name)
+    if before == nil then return nil end
+    if before == 0 then return true end
+
+    -- 1) the normal path
+    local emptyRan = pcall(function() actor[name]:Empty() end)
+    if emptyRan and countOf(actor, name) == 0 then
+        if not clearStrategyLogged then
+            clearStrategyLogged = true
+            log("icon arrays are cleared with TArray:Empty()")
+        end
+        return true
+    end
+
+    -- 2) Empty() is missing or is a no-op on this UE4SS build: overwrite the
+    --    whole property with an empty array instead. Guarded and verified the
+    --    same way -- if it does not take either, we simply never destroy.
+    local assignRan = pcall(function() actor[name] = {} end)
+    if assignRan and countOf(actor, name) == 0 then
+        if not clearStrategyLogged then
+            clearStrategyLogged = true
+            log("TArray:Empty() does not work on this UE4SS build; " ..
+                "icon arrays are cleared by property assignment instead")
+        end
+        return true
+    end
+
+    return false
+end
+
 local function resetPalIcons(actor, reason)
-    local comps = collectIconComponents(actor)
-    local cleared = pcall(function()
-        actor.palIconMapSMs:Empty()
-        actor.trackedPals:Empty()
-        actor.monsterMapIDs:Empty()
-    end)
-    if not cleared then
+    -- Probe with the component array first: while it is untouched every array
+    -- is still consistent with the others, so bailing out here is always safe.
+    local comps = collectIconComponents(actor, "palIconMapSMs")
+    local state = clearArrayVerified(actor, "palIconMapSMs")
+    if state ~= true then
         if not emptyUnsupportedWarned then
             emptyUnsupportedWarned = true
-            log("note: TArray:Empty() unavailable; icon resets disabled " ..
-                "(destroying tracked icons would crash; orphan hiding still runs)")
+            log("WARNING: the pal icon array cannot be cleared on this UE4SS build " ..
+                (state == nil and "(property missing)" or "(Empty() and assignment both refused)") ..
+                " -- icon resets are disabled because destroying icons the blueprint " ..
+                "still references would crash. Orphaned icons are only quiesced, so " ..
+                "expect the minimap to get gradually heavier until you fast travel.")
         end
         return false
     end
+
+    -- The pal icon array is gone, so the id/actor arrays MUST go too or the
+    -- blueprint will never re-add the pals it thinks it is still tracking.
+    clearArrayVerified(actor, "trackedPals")
+    clearArrayVerified(actor, "monsterMapIDs")
+
     local destroyed = 0
     for _, comp in ipairs(comps) do
         local ok = pcall(function()
@@ -593,6 +676,17 @@ end
 -- use-after-free hard crash. SetVisibility is idempotent and keeps the arrays
 -- consistent; resetPalIcons above still frees pal icons for real because it
 -- clears the arrays first. Returns true when it hid something.
+-- An icon whose target actor is gone can never be shown or moved meaningfully
+-- again, but it stays in the blueprint's array and every per-frame icon loop
+-- keeps walking it. Hiding it drops its render proxy; switching its tick off as
+-- well makes it as close to free as a component we are not allowed to remove
+-- can get. Both writes are idempotent.
+local function quiesceComponent(comp)
+    pcall(function() comp:SetVisibility(false, true) end)
+    pcall(function() comp:SetComponentTickEnabled(false) end)
+    pcall(function() comp:SetHiddenInGame(true, true) end)
+end
+
 local function hideIfOrphaned(elem)
     local comp = elem:get()
     if not (comp and comp:IsValid()) then return false end
@@ -601,11 +695,40 @@ local function hideIfOrphaned(elem)
     local visible = nil
     pcall(function() visible = comp:IsVisible() end)
     if visible == false then return false end   -- already hidden: nothing to do
-    comp:SetVisibility(false, true)
+    quiesceComponent(comp)
     return true
 end
 
--- Janitor Pass Otimizado
+-- Every icon array the blueprint maintains. Only used for the periodic census
+-- below: if a build ever does grow an array we do not expect, the user's
+-- UE4SS.log says so outright instead of us guessing from a lag report.
+local ALL_ICON_ARRAYS = {
+    "palIconMapSMs", "trackedPals", "monsterMapIDs", "palIconNumbers",
+    "mapIcon_CHESTS", "eggicons", "notesIcons", "EffigyIcons",
+    "SkillFruitTreeIcons", "fastTravelPointIcons", "DungeonIcons",
+    "enemyCampIcons", "playerCampIcons", "NPCHumanIcons", "deathIcons",
+    "mapIcon_PLAYERS", "killedOrCaptured",
+}
+
+local lastCensus = 0.0
+
+local function logIconCensus(actor)
+    local parts, total = {}, 0
+    for _, name in ipairs(ALL_ICON_ARRAYS) do
+        local n = countOf(actor, name)
+        if type(n) == "number" then
+            total = total + n
+            if n > 0 then parts[#parts + 1] = string.format("%s=%d", name, n) end
+        end
+    end
+    log(string.format("icon census: %d tracked entries | %s", total, table.concat(parts, " ")))
+end
+
+-- Cheap pass (every COUNT_CHECK_MS): only reads three array lengths, so it can
+-- run often and cap the pal icon array quickly. The expensive part -- walking
+-- the array through UE4SS reflection to find orphans -- still runs rarely,
+-- because every walk is a chance to dereference an entry the blueprint just
+-- destroyed (a native access violation pcall cannot catch).
 local function janitorPass()
     if worldName == "" or NON_GAME_WORLDS[worldName] then return end
     local actor = getModActor()
@@ -620,8 +743,14 @@ local function janitorPass()
     if not okn or n1 == nil or n2 == nil or n3 == nil then return end
 
     local now = os.clock()
+
+    if (now - lastCensus) >= CENSUS_SECONDS then
+        lastCensus = now
+        pcall(logIconCensus, actor)
+    end
+
     local desynced = (n1 ~= n2 or n2 ~= n3)
-    
+
     if desynced then desyncStreak = desyncStreak + 1 else desyncStreak = 0 end
 
     if not countResetsDisabled then
@@ -642,18 +771,21 @@ local function janitorPass()
             desyncStreak = 0
             return
         end
-    end
 
-    local inCamp = false
-    pcall(function() inCamp = actor.currentlyInABaseCamp == true end)
-    if inCamp and (now - lastCampReset) > CAMP_RESET_SECONDS and n3 > 0 then
-        lastCampReset = now
-        resetPalIcons(actor, "base camp periodic")
-        return
+        local inCamp = false
+        pcall(function() inCamp = actor.currentlyInABaseCamp == true end)
+        if inCamp and (now - lastCampReset) > CAMP_RESET_SECONDS and n3 > 0 then
+            lastCampReset = now
+            lastCountReset = now   -- share the cooldown: never two resets back to back
+            if not resetPalIcons(actor, "base camp periodic") then
+                countResetsDisabled = true
+            end
+            return
+        end
     end
 
     janitorPassCount = janitorPassCount + 1
-    if n3 > 0 and (janitorPassCount % 3) == 0 then
+    if n3 > 0 and (janitorPassCount % ORPHAN_WALK_EVERY) == 0 then
         pcall(function()
             actor.palIconMapSMs:ForEach(function(_, elem)
                 pcall(hideIfOrphaned, elem)
@@ -1327,12 +1459,34 @@ end
 local function openMenu()
     if menuOpen then return end
     local wname = currentWorldName()
-    if wname == nil then return end
-    -- refuse to open during world transitions (cached name must agree)
-    if wname ~= worldName then return end
-    -- drop the config cache so edits made outside this menu (another tool
-    -- writing the same file) are picked up instead of clobbered on save
+    if wname == nil then
+        log("menu not opened: no world yet")
+        return
+    end
+    -- Refuse to open during a world transition -- but only when we actually know
+    -- of a different world. worldName is blank before the first world tick and
+    -- straight after the LoadMap hook, and the old "must match" test then made
+    -- F5 silently do nothing until the tick caught up (or forever, if the tick
+    -- never restored it). Adopt the live name instead of dead-ending.
+    if worldName == "" then
+        worldName = wname
+    elseif wname ~= worldName then
+        log("menu not opened: world transition in progress")
+        return
+    end
+    -- Re-read the file so edits made outside this menu (another tool writing the
+    -- same file) are picked up instead of clobbered on save. If it is momentarily
+    -- unreadable, fall back to the values we already have -- losing the menu
+    -- entirely over a transient read failure is far worse than stale defaults.
     configCache = nil
+    if readConfig() == nil then
+        configCache = lastGoodConfig
+        if configCache == nil then
+            log("menu not opened: settings file unreadable (" .. CONFIG_PATH .. ")")
+            return
+        end
+        log("warning: settings file unreadable; opening the menu with the last known values")
+    end
 
     local okpc, pc = pcall(UEHelpers.GetPlayerController)
     if not okpc or not isAlive(pc) then
@@ -1355,6 +1509,11 @@ local function openMenu()
         log("menu opened")
     else
         log("ERROR opening menu: " .. tostring(err))
+        -- the failure may have happened after AddToViewport; leaving the widget
+        -- on screen with no way to reach it would block every later open
+        if menu ~= nil and isAlive(menu) then
+            pcall(function() menu:RemoveFromParent() end)
+        end
         dropMenuRefs()
     end
 end
@@ -1387,10 +1546,11 @@ local function toggleMenu()
     -- debounce rapid presses
     if (os.clock() - lastToggle) < 0.35 then return end
     lastToggle = os.clock()
-    -- widget silently died (world swap with same name etc.) -> just reset
+    -- widget silently died (world swap with same name etc.): drop the stale
+    -- refs and open a fresh one right away -- the old code swallowed the press
+    -- and forced the user to hit the key twice
     if menuOpen and not menuUsable() then
         dropMenuRefs()
-        return
     end
     if menuOpen then closeMenu() else openMenu() end
 end
@@ -1537,8 +1697,10 @@ LoopAsync(250, function()
     return false
 end)
 
--- Janitor (30s)
-LoopAsync(30000, function()
+-- Janitor: cheap count check often, expensive orphan walk every ORPHAN_WALK_EVERY
+-- passes. The old build only checked the cap every 30 s, so a busy area could sit
+-- three times over the soft cap between passes.
+LoopAsync(COUNT_CHECK_MS, function()
     pcall(ExecuteInGameThread, function()
         runGuarded("janitorPass", janitorPass)
     end)

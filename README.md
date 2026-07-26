@@ -2,6 +2,30 @@
 PalMiniMap — a live minimap radar for Palworld 1.0+
 Based on Paldar by T3R3NC3B.
 
+WHAT'S NEW IN v1.2.5
+- Fixes the FPS decay reported when staying in one area for a long time
+  (and the occasional crash on alt-tab that came with it). The pal icon
+  array is the only one the blueprint never rebuilds by itself: a pal
+  that just despawns leaves its minimap icon behind forever, and every
+  per-frame icon loop keeps walking it. The janitor that is supposed to
+  cap that array was silently doing nothing on some UE4SS builds - it
+  assumed the array had been cleared without ever checking. It now
+  verifies the array is really empty, uses a fallback if the engine call
+  is unsupported, and only destroys icon components once they are proven
+  to be unreferenced (destroying referenced ones was the crash).
+- The icon count is now checked every 10 s instead of every 30 s, so a
+  busy area can no longer sit far above the cap between passes.
+- Orphaned icons that cannot be removed are now fully quiesced (render
+  and tick both switched off) instead of merely hidden.
+- The config menu no longer refuses to open after a transient hiccup:
+  a momentarily unreadable settings file now falls back to the values
+  already in memory, a blank world name is adopted instead of dead-ending,
+  a failed open cleans up after itself, and every refusal says why in
+  UE4SS.log.
+- Added a periodic "icon census" line to UE4SS.log listing how many
+  entries each icon array holds - please include it in any performance
+  report.
+
 WHAT'S NEW IN v1.1.0
 - New: collected items now disappear from the minimap. When you pick up
   a chest, egg, note or lifmunk effigy (it despawns from the world), its
