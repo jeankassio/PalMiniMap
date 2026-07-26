@@ -6,10 +6,103 @@
 --     the original Paldar (stale pal icon components piling up)
 -- =====================================================================
 
-local UEHelpers = require("UEHelpers")
-local json = require("json")
+-- ---------------------------------------------------------------
+-- Error handling policy (v1.2.7)
+--
+-- pcall / xpcall are Lua's try-catch. Every boundary where this script is
+-- entered from outside (key binds, timer callbacks, engine hooks, script load)
+-- and every operation that can raise (engine reflection, file IO, JSON) runs
+-- inside one, so a failure is logged and the mod keeps working instead of the
+-- feature dying silently.
+--
+-- WHAT THIS CANNOT DO -- read this before trusting it: a pcall only catches
+-- LUA errors. It cannot catch a native access violation. When a UE4SS
+-- reflection call dereferences a UObject the engine already freed, the crash
+-- happens inside C++ and takes the whole game down before any Lua handler
+-- runs -- that was the v1.2.2 and v1.2.6 crash. Nothing in this file can catch
+-- those; they are only avoided by NOT touching dying objects, which is the job
+-- of the world-change and teleport guards further down. Keep both layers.
+-- ---------------------------------------------------------------
 
-local MENU_KEY = Key.F5           -- menu hotkey (change it here if you want)
+local function log(msg)
+    -- logging must never be the thing that breaks a caller
+    pcall(function() print("[PalMiniMap] " .. tostring(msg) .. "\n") end)
+end
+
+-- Build an error message with a stack traceback when the debug library is
+-- available (UE4SS sandboxes vary), so a report says WHERE it failed.
+local function describeError(err)
+    if debug ~= nil and type(debug.traceback) == "function" then
+        local ok, tb = pcall(debug.traceback, tostring(err), 2)
+        if ok and type(tb) == "string" then return tb end
+    end
+    return tostring(err)
+end
+
+-- Repeat suppression: a broken periodic task would otherwise write the same
+-- error every few seconds and bury the log (and cost IO). The first failure is
+-- reported in full; repeats of the same label are counted and summarised.
+local ERROR_REPEAT_SECONDS = 60
+local errorState = {}
+
+local function reportError(label, err)
+    label = tostring(label)
+    local now = os.clock()
+    local st = errorState[label]
+    if st == nil then
+        errorState[label] = { count = 1, lastLogged = now }
+        log("ERROR in " .. label .. " (handled, continuing): " .. describeError(err))
+        return
+    end
+    st.count = st.count + 1
+    if (now - st.lastLogged) >= ERROR_REPEAT_SECONDS then
+        log(string.format("ERROR in %s (handled, continuing) x%d since last report: %s",
+                          label, st.count, tostring(err)))
+        st.lastLogged = now
+        st.count = 0
+    end
+end
+
+-- try(label, fn, ...) -> ok, results...
+-- The general form: takes arguments, forwards return values, never propagates.
+local function try(label, fn, ...)
+    local ok, a, b, c = xpcall(fn, describeError, ...)
+    if not ok then
+        reportError(label, a)
+        return false
+    end
+    return true, a, b, c
+end
+
+-- Run fn, swallowing any error but LOGGING it (so a failure is visible in the
+-- UE4SS log instead of silently stopping a feature). Used to wrap every
+-- periodic task: one bad pass can never take the loop down, and the next pass
+-- runs normally. This is the "if it errors, ignore it and keep going" guard.
+local function runGuarded(label, fn)
+    return (try(label, fn))
+end
+
+-- Dependencies. A missing module is not something the rest of the script can
+-- work around, so say so plainly and register nothing rather than letting every
+-- later call fail one by one.
+local function needModule(name)
+    local ok, mod = pcall(require, name)
+    if ok and mod ~= nil then return mod end
+    log("FATAL: could not load required module '" .. name .. "': " .. tostring(mod))
+    return nil
+end
+
+local UEHelpers = needModule("UEHelpers")
+local json = needModule("json")
+if UEHelpers == nil or json == nil then
+    log("PalMiniMap is disabled for this session (missing dependency above).")
+    do return end
+end
+
+-- `Key` is a UE4SS global. Indexing it bare would abort the whole script at
+-- load time if a build ever renamed it; the keybind registration below already
+-- copes with a nil key, so read it defensively.
+local MENU_KEY = (type(Key) == "table") and Key.F5 or nil
 local MENU_KEY_NAME = "F5"        -- name shown in the menu header
 -- NOTE: the blueprint reads this exact filename; the pak is 100% stock bytecode
 local CONFIG_PATH = "../../Content/Paks/LogicMods/Paldar.modconfig.json"
@@ -39,7 +132,7 @@ local BACKUP_PATH = SCRIPT_DIRECTORY and (SCRIPT_DIRECTORY .. "/../user_settings
 -- updates. New keys from future versions are merged in while preserving
 -- the user's values.
 local DEFAULTS_JSON = [==[
-{"note":"THIS JSON FILE WAS CREATED USING THE `DekModConfigMenu` MOD FOR PALWORLD! DO NOT MANUALLY EDIT THIS FILE UNLESS YOU KNOW WHAT YOU'RE DOING -- USE THE `DekModConfigMenu` MOD INSTEAD <3","meta":{"game":false,"vers":"1.2.6","auth":"T3R3NC3B","desc":"PalMiniMap (based on Paldar by T3R3NC3B) - a minimap radar that displays live pal positions and more. Updated for Palworld 1.0 By Jean Kassio.","link":{"nexus-mod-id":"879","curse-slug":"blueprint-code-mods/paldar-mini-map-radar","donate":""}},"General Settings":{"type":"header","desc":"Configure general settings."},"Enable mod":{"type":"boolean","desc":"Enable/disable the entire Paldar mod.","init":true,"live":true},"Minimap render resolution":{"type":"integer","desc":"Lower numbers for better performance, at the cost of quality.","flag":"","opts":{"min":32,"max":2048,"step":1},"init":512,"live":512},"Minimap opacity":{"type":"integer","desc":"Adjust transparency of the whole minimap.","flag":"","opts":{"min":1,"max":100,"step":1},"init":100,"live":100},"Minimap shape":{"type":"option","desc":"Change minimap shape to circular or square.","opts":["Circle","Square"],"init":"Square","live":"Square"},"Minimap autozoom while moving":{"type":"boolean","desc":"Auto zoom out minimap to different levels when walking, running & flying.","init":true,"live":true},"Minimap rotation lock":{"type":"boolean","desc":"Lock minimap rotation to north, player icon rotates instead.","init":false,"live":false},"Lock all icon rotations to north":{"type":"boolean","desc":"Locks all icons (excluding pals & NPCs) to be upright (north).","init":false,"live":false},"Autohide minimap while in base camps":{"type":"boolean","desc":"Hide minimap while in player base camps.","init":false,"live":false},"Hide collected items from minimap":{"type":"boolean","desc":"Remove chest, egg, note and lifmunk effigy icons from the minimap once you collect them (they disappear from the world).","init":true,"live":true},"Pal Locations":{"type":"header","desc":"Configure settings for displaying Pals."},"Show pal positions":{"type":"boolean","desc":"Show Pals around the player on the minimap.","init":true,"live":true},"Only show shiny pals":{"type":"boolean","desc":"Only shows shiny Pals around the player on the minimap.","init":false,"live":false},"Show pal icons while megazoomed out":{"type":"boolean","desc":"Keep Pal icons visible on the minimap while in megazoomed out mode.","init":false,"live":false},"NPCs and Points of Interest":{"type":"header","desc":"Customize display settings for NPCs and points of interest."},"Show NPC humans":{"type":"boolean","desc":"Show NPC humans on the minimap.","init":true,"live":true},"Show player base camps":{"type":"boolean","desc":"Show player base camps on the minimap.","init":true,"live":true},"Show player death locations":{"type":"boolean","desc":"Show player death locations on the minimap.","init":true,"live":true},"Show other players":{"type":"boolean","desc":"Show other players around the player on the minimap.","init":true,"live":true},"Show dungeons":{"type":"boolean","desc":"Show dungeon locations on the minimap.","init":true,"live":true},"Chests, Notes, and Other":{"type":"header","desc":"Customize display settings for chests, notes, and other entities."},"Show chests":{"type":"boolean","desc":"Show chests around the player on the minimap.","init":true,"live":true},"Show notes":{"type":"boolean","desc":"Show notes around the player on the minimap.","init":true,"live":true},"Show eggs":{"type":"boolean","desc":"Show eggs around the player on the minimap.","init":true,"live":true},"Show fast travel points":{"type":"boolean","desc":"Show fast travel points on the minimap.","init":true,"live":true},"Show skillfruit trees":{"type":"boolean","desc":"Show skillfruit trees around the player on the minimap.","init":true,"live":true},"Show lifmunk effigies":{"type":"boolean","desc":"Show Lifmunk Effigies around the player on the minimap.","init":false,"live":false},"Scan Frequencies":{"type":"header","desc":"Adjust scanning frequencies for various entities."},"Pal rescan rate":{"type":"integer","desc":"How often the radar will scan for new Pals around the player. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":5,"live":5},"Players rescan frequency":{"type":"integer","desc":"How often the radar will scan for NEW players (not refresh rate of current players). In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":12,"live":12},"Human NPC rescan frequency":{"type":"integer","desc":"How often the radar will scan for NPC humans around the player on the minimap. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":19,"live":19},"Chest rescan frequency":{"type":"integer","desc":"How often the radar will scan for chests around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Egg rescan frequency":{"type":"integer","desc":"How often the radar will scan for eggs around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Keybinds":{"type":"header","desc":"Customize keyboard shortcuts."},"Megazoom mode toggle keybind":{"type":"keybind","desc":"Set keybind for megazoom out mode toggle. Hold this key and press + or - to fine-zoom the minimap.","init":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Cycle default minimap positions keybind":{"type":"keybind","desc":"Set keybind for cycling between default minimap positions.","init":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Show/hide minimap toggle keybind":{"type":"keybind","desc":"Show/hide minimap toggle keyboard button.","init":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Customize minimap keybind":{"type":"keybind","desc":"Set keybind to enter customization mode - move with arrow keys, resize with + and - keys.","init":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Use new minimap edit mode size method":{"type":"boolean","desc":"ON: resize minimap in edit mode with mouse scroll wheel (BROKEN on Palworld 1.0). OFF (default): resize with + and - keys (also 9 and 0).","init":false,"live":false},"Minimap capture LOD bias":{"type":"integer","desc":"Renders the minimap terrain with cheaper detail levels. 1 = original, higher = faster. Barely visible on the small map.","flag":"","opts":{"min":1,"max":8,"step":1},"init":3,"live":3}}
+{"note":"THIS JSON FILE WAS CREATED USING THE `DekModConfigMenu` MOD FOR PALWORLD! DO NOT MANUALLY EDIT THIS FILE UNLESS YOU KNOW WHAT YOU'RE DOING -- USE THE `DekModConfigMenu` MOD INSTEAD <3","meta":{"game":false,"vers":"1.2.7","auth":"T3R3NC3B","desc":"PalMiniMap (based on Paldar by T3R3NC3B) - a minimap radar that displays live pal positions and more. Updated for Palworld 1.0 By Jean Kassio.","link":{"nexus-mod-id":"879","curse-slug":"blueprint-code-mods/paldar-mini-map-radar","donate":""}},"General Settings":{"type":"header","desc":"Configure general settings."},"Enable mod":{"type":"boolean","desc":"Enable/disable the entire Paldar mod.","init":true,"live":true},"Minimap render resolution":{"type":"integer","desc":"Lower numbers for better performance, at the cost of quality.","flag":"","opts":{"min":32,"max":2048,"step":1},"init":512,"live":512},"Minimap opacity":{"type":"integer","desc":"Adjust transparency of the whole minimap.","flag":"","opts":{"min":1,"max":100,"step":1},"init":100,"live":100},"Minimap shape":{"type":"option","desc":"Change minimap shape to circular or square.","opts":["Circle","Square"],"init":"Square","live":"Square"},"Minimap autozoom while moving":{"type":"boolean","desc":"Auto zoom out minimap to different levels when walking, running & flying.","init":true,"live":true},"Minimap rotation lock":{"type":"boolean","desc":"Lock minimap rotation to north, player icon rotates instead.","init":false,"live":false},"Lock all icon rotations to north":{"type":"boolean","desc":"Locks all icons (excluding pals & NPCs) to be upright (north).","init":false,"live":false},"Autohide minimap while in base camps":{"type":"boolean","desc":"Hide minimap while in player base camps.","init":false,"live":false},"Hide collected items from minimap":{"type":"boolean","desc":"Remove chest, egg, note and lifmunk effigy icons from the minimap once you collect them (they disappear from the world).","init":true,"live":true},"Pal Locations":{"type":"header","desc":"Configure settings for displaying Pals."},"Show pal positions":{"type":"boolean","desc":"Show Pals around the player on the minimap.","init":true,"live":true},"Only show shiny pals":{"type":"boolean","desc":"Only shows shiny Pals around the player on the minimap.","init":false,"live":false},"Show pal icons while megazoomed out":{"type":"boolean","desc":"Keep Pal icons visible on the minimap while in megazoomed out mode.","init":false,"live":false},"NPCs and Points of Interest":{"type":"header","desc":"Customize display settings for NPCs and points of interest."},"Show NPC humans":{"type":"boolean","desc":"Show NPC humans on the minimap.","init":true,"live":true},"Show player base camps":{"type":"boolean","desc":"Show player base camps on the minimap.","init":true,"live":true},"Show player death locations":{"type":"boolean","desc":"Show player death locations on the minimap.","init":true,"live":true},"Show other players":{"type":"boolean","desc":"Show other players around the player on the minimap.","init":true,"live":true},"Show dungeons":{"type":"boolean","desc":"Show dungeon locations on the minimap.","init":true,"live":true},"Chests, Notes, and Other":{"type":"header","desc":"Customize display settings for chests, notes, and other entities."},"Show chests":{"type":"boolean","desc":"Show chests around the player on the minimap.","init":true,"live":true},"Show notes":{"type":"boolean","desc":"Show notes around the player on the minimap.","init":true,"live":true},"Show eggs":{"type":"boolean","desc":"Show eggs around the player on the minimap.","init":true,"live":true},"Show fast travel points":{"type":"boolean","desc":"Show fast travel points on the minimap.","init":true,"live":true},"Show skillfruit trees":{"type":"boolean","desc":"Show skillfruit trees around the player on the minimap.","init":true,"live":true},"Show lifmunk effigies":{"type":"boolean","desc":"Show Lifmunk Effigies around the player on the minimap.","init":false,"live":false},"Scan Frequencies":{"type":"header","desc":"Adjust scanning frequencies for various entities."},"Pal rescan rate":{"type":"integer","desc":"How often the radar will scan for new Pals around the player. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":5,"live":5},"Players rescan frequency":{"type":"integer","desc":"How often the radar will scan for NEW players (not refresh rate of current players). In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":12,"live":12},"Human NPC rescan frequency":{"type":"integer","desc":"How often the radar will scan for NPC humans around the player on the minimap. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":19,"live":19},"Chest rescan frequency":{"type":"integer","desc":"How often the radar will scan for chests around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Egg rescan frequency":{"type":"integer","desc":"How often the radar will scan for eggs around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Keybinds":{"type":"header","desc":"Customize keyboard shortcuts."},"Megazoom mode toggle keybind":{"type":"keybind","desc":"Set keybind for megazoom out mode toggle. Hold this key and press + or - to fine-zoom the minimap.","init":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Cycle default minimap positions keybind":{"type":"keybind","desc":"Set keybind for cycling between default minimap positions.","init":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Show/hide minimap toggle keybind":{"type":"keybind","desc":"Show/hide minimap toggle keyboard button.","init":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Customize minimap keybind":{"type":"keybind","desc":"Set keybind to enter customization mode - move with arrow keys, resize with + and - keys.","init":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Use new minimap edit mode size method":{"type":"boolean","desc":"ON: resize minimap in edit mode with mouse scroll wheel (BROKEN on Palworld 1.0). OFF (default): resize with + and - keys (also 9 and 0).","init":false,"live":false},"Minimap capture LOD bias":{"type":"integer","desc":"Renders the minimap terrain with cheaper detail levels. 1 = original, higher = faster. Barely visible on the small map.","flag":"","opts":{"min":1,"max":8,"step":1},"init":3,"live":3}}
 ]==]
 
 -- The stock blueprint reads these four keybind entries from the modconfig
@@ -132,20 +225,51 @@ local NON_GAME_WORLDS = {
     PL_PPSplash = true, PL_Login = true, PL_Title = true,
 }
 
-local function log(msg)
-    print(string.format("[PalMiniMap] %s\n", msg))
+-- Registration is itself guarded, one item at a time. Before v1.2.7 these ran
+-- bare at module scope: if RegisterKeyBind or the first LoopAsync had raised on
+-- some UE4SS build, every registration BELOW it would never happen and the mod
+-- would load "successfully" with no janitor and no menu. Now each one that
+-- fails costs only itself, and says so in the log.
+local function register(label, fn)
+    if not try("register " .. label, fn) then
+        log("'" .. label .. "' is unavailable this session; the rest of the mod still runs")
+    end
 end
 
--- Run fn, swallowing any error but LOGGING it (so a failure is visible in the
--- UE4SS log instead of silently stopping a feature). Used to wrap every
--- periodic task: one bad pass can never take the loop down, and the next pass
--- runs normally. This is the "if it errors, ignore it and keep going" guard.
-local function runGuarded(label, fn)
-    local ok, err = pcall(fn)
-    if not ok then
-        log("ERROR in " .. tostring(label) .. " (ignored, will retry): " .. tostring(err))
+-- Wrap a callback the ENGINE calls into: nothing thrown in here may travel back
+-- across the C++ boundary. Hook arguments are intentionally dropped -- none of
+-- the callbacks here use them.
+local function callback(label, fn)
+    return function() try(label, fn) end
+end
+
+-- Same, for a key bind: UE4SS raises those on ITS OWN thread, so the work must
+-- be handed to the game thread first. Touching UObjects or building UMG widgets
+-- from the key thread is not safe.
+local function gameThreadCallback(label, fn)
+    return function()
+        try(label .. " (dispatch)", function()
+            ExecuteInGameThread(callback(label, fn))
+        end)
     end
-    return ok
+end
+
+-- Body of a periodic loop: optionally skip, hop to the game thread, run
+-- guarded, and ALWAYS return false so UE4SS keeps the timer alive whatever
+-- happened. `shouldRun` is evaluated on the timer thread so a sleeping loop
+-- costs no game-thread hop at all.
+local function loopBody(label, fn, shouldRun)
+    local dispatchLabel = label .. " (dispatch)"
+    return function()
+        if shouldRun ~= nil then
+            local ok, wanted = try(dispatchLabel, shouldRun)
+            if not ok or not wanted then return false end
+        end
+        try(dispatchLabel, function()
+            ExecuteInGameThread(callback(label, fn))
+        end)
+        return false
+    end
 end
 
 -- ---------------------------------------------------------------
@@ -283,15 +407,24 @@ end
 local configCache = nil
 local lastGoodConfig = nil   -- survives a failed re-read so the menu can still open
 
+-- Read a whole file. Every step can raise (handle yanked mid-read, locked file,
+-- encoding surprises), so the caller only ever gets a string or nil.
+local function readFileText(path)
+    local opened, f = pcall(io.open, path, "r")
+    if not opened or not f then return nil end
+    local ok, text = pcall(function() return f:read("*a") end)
+    pcall(function() f:close() end)
+    if not ok or type(text) ~= "string" then return nil end
+    return text
+end
+
 local function readConfig()
     if configCache then return configCache end
-    local f = io.open(CONFIG_PATH, "r")
-    if not f then
-        log("ERROR: could not open " .. CONFIG_PATH)
+    local text = readFileText(CONFIG_PATH)
+    if text == nil then
+        log("ERROR: could not read " .. CONFIG_PATH)
         return nil
     end
-    local text = f:read("*a")
-    f:close()
     local ok, cfg = pcall(json.decode, text)
     if not ok then
         log(string.format("ERROR: failed to decode JSON (len=%d): %s",
@@ -353,12 +486,12 @@ local function applyCaptureLOD(actor)
 end
 
 local function writeFileTo(path, text)
-    local f = io.open(path, "w")
-    if not f then return false end
-    -- write can raise (disk full / handle yanked); never let that propagate
-    -- into script load or a menu commit
+    -- every step can raise (path missing, disk full, handle yanked); never let
+    -- that propagate into script load or a menu commit
+    local opened, f = pcall(io.open, path, "w")
+    if not opened or not f then return false end
     local ok = pcall(function() f:write(text) end)
-    f:close()
+    pcall(function() f:close() end)
     return ok
 end
 
@@ -370,9 +503,10 @@ local function writeFileAtomic(path, text)
     if not writeFileTo(tmp, text) then
         return writeFileTo(path, text)   -- temp not writable: direct write
     end
-    os.remove(path)                      -- Windows rename won't overwrite
-    if os.rename(tmp, path) then return true end
-    os.remove(tmp)
+    pcall(os.remove, path)               -- Windows rename won't overwrite
+    local renameRan, renamed = pcall(os.rename, tmp, path)
+    if renameRan and renamed then return true end
+    pcall(os.remove, tmp)
     return writeFileTo(path, text)
 end
 
@@ -394,10 +528,8 @@ local function writeConfig(cfg)
 end
 
 local function readJsonFile(path)
-    local f = io.open(path, "r")
-    if not f then return nil end
-    local text = f:read("*a")
-    f:close()
+    local text = readFileText(path)
+    if text == nil then return nil end
     local ok, cfg = pcall(json.decode, text)
     if ok and type(cfg) == "table" then return cfg end
     return nil
@@ -1092,18 +1224,20 @@ end
 local function registerZoomKeys()
     local plusKeys  = { "ADD", "OEM_PLUS" }
     local minusKeys = { "SUBTRACT", "OEM_MINUS" }
+    -- each key registers independently: one unrecognised key name must not
+    -- cost the others, and the handler itself is guarded on the game thread
     for _, k in ipairs(plusKeys) do
-        pcall(function()
-            RegisterKeyBind(Key[k], function()
-                ExecuteInGameThread(function() zoomStep(-ZOOM_STEP) end)
-            end)
+        try("zoom keybind " .. k, function()
+            RegisterKeyBind(Key[k], gameThreadCallback("zoom in", function()
+                zoomStep(-ZOOM_STEP)
+            end))
         end)
     end
     for _, k in ipairs(minusKeys) do
-        pcall(function()
-            RegisterKeyBind(Key[k], function()
-                ExecuteInGameThread(function() zoomStep(ZOOM_STEP) end)
-            end)
+        try("zoom keybind " .. k, function()
+            RegisterKeyBind(Key[k], gameThreadCallback("zoom out", function()
+                zoomStep(ZOOM_STEP)
+            end))
         end)
     end
 end
@@ -1440,7 +1574,12 @@ local function buildMenu(pc)
     padSlot(scroll:AddChild(headerBorder), 0, 0, 0, 8)
 
     -- Rows -----------------------------------------------------------------
+    -- Each row is built inside its own guard: a single option that the engine
+    -- refuses to render (an unexpected type, a widget class missing on this
+    -- build) now costs just that row instead of the whole menu, which is what
+    -- "F5 does nothing" looked like from the outside.
     for _, item in ipairs(MENU_LAYOUT) do
+      try("menu row '" .. tostring(item.header or item.key) .. "'", function()
         if item.header then
             local header = menuText(language, item.header)
             padSlot(scroll:AddChild(makeText(tree, string.upper(header), 13, UI.accent, 0, false)),
@@ -1541,6 +1680,7 @@ local function buildMenu(pc)
                 end
             end
         end
+      end)
     end
 
     padSlot(scroll:AddChild(makeText(tree, menuText(language, "footer"),
@@ -1766,39 +1906,33 @@ end
 -- violation pcall cannot catch). UEngine::LoadMap fires right at the
 -- transition, so drop every cached reference immediately and re-arm the
 -- BeginPlay grace window. Best-effort: on UE4SS builds without this hook the
--- world tick below still handles it (just later).
-pcall(function()
-    RegisterLoadMapPreHook(function()
+-- world tick below still handles it (just later). The body is pure Lua
+-- bookkeeping, so it is safe to run on whichever thread the hook fires from.
+register("world transition hook", function()
+    RegisterLoadMapPreHook(callback("LoadMapPreHook", function()
         actorGraceUntil = os.clock() + ACTOR_TOUCH_GRACE
         cachedActor = nil
         worldName = ""
         dropMenuRefs()
-    end)
+    end))
 end)
 
-RegisterKeyBind(MENU_KEY, function()
-    ExecuteInGameThread(function() pcall(toggleMenu) end)
+register("menu keybind (" .. MENU_KEY_NAME .. ")", function()
+    RegisterKeyBind(MENU_KEY, gameThreadCallback("toggleMenu", toggleMenu))
 end)
 
-registerZoomKeys()
+register("zoom keybinds", registerZoomKeys)
 
-LoopAsync(250, function()
-    if menuOpen then
-        pcall(ExecuteInGameThread, function()
-            runGuarded("collectChanges", collectChanges)
-        end)
-    end
-    return false
+register("menu poll loop", function()
+    LoopAsync(250, loopBody("collectChanges", collectChanges,
+                            function() return menuOpen end))
 end)
 
 -- Janitor: cheap count check often, expensive orphan walk every ORPHAN_WALK_EVERY
 -- passes. The old build only checked the cap every 30 s, so a busy area could sit
 -- three times over the soft cap between passes.
-LoopAsync(COUNT_CHECK_MS, function()
-    pcall(ExecuteInGameThread, function()
-        runGuarded("janitorPass", janitorPass)
-    end)
-    return false
+register("icon janitor loop", function()
+    LoopAsync(COUNT_CHECK_MS, loopBody("janitorPass", janitorPass))
 end)
 
 -- Hides effigies/notes already collected. This is the ONLY remaining pass that
@@ -1808,17 +1942,13 @@ end)
 -- crash). CADENCE MATTERS FOR STABILITY: every walk dereferences entries the
 -- blueprint may have destroyed, and a native access violation cannot be caught
 -- by pcall, so this stays slow and is gated by iconWorkAllowed().
-LoopAsync(23000, function()
-    pcall(ExecuteInGameThread, function()
-        runGuarded("hideCollectedObtainables", hideCollectedObtainables)
-    end)
-    return false
+register("collected-items loop", function()
+    LoopAsync(23000, loopBody("hideCollectedObtainables", hideCollectedObtainables))
 end)
 
 -- World tick (3s)
-LoopAsync(3000, function()
-    pcall(ExecuteInGameThread, function()
-        runGuarded("worldTick", function()
+register("world tick loop", function()
+    LoopAsync(3000, loopBody("worldTick", function()
             local name = currentWorldName()
             if name == nil then
                 -- During shutdown the UWorld can disappear before UE4SS stops its
@@ -1866,14 +1996,13 @@ LoopAsync(3000, function()
             end
             -- Terrain capture is left to the stock blueprint. The config menu is
             -- opened/closed only with F5 (no auto-open on the title screen).
-        end)
-    end)
-    return false
+    end))
 end)
 
 -- Create/restore/merge the settings file at startup, before any world
 -- (and the mod's own blueprint) reads it. Also warms the config cache.
-ensureConfig()
+-- Guarded: a corrupt settings file must not stop the loops above from running.
+register("settings file", ensureConfig)
 if configCache then
     log("config ready")
 end

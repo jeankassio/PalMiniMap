@@ -52,6 +52,31 @@ UNINSTALL
 Delete the files listed above (and the two PalMiniMap folders).
 
 ===================================================================
+WHAT'S NEW IN v1.2.7
+===================================================================
+- Hardening pass: every place the mod can be entered from outside
+  (key presses, timers, engine hooks, script load) and every operation
+  that can fail (engine calls, file reads/writes, JSON) now runs inside
+  an error guard. A failure is written to UE4SS.log and the mod carries
+  on instead of the feature dying silently.
+- Startup is no longer all-or-nothing. Each keybind, each timer and the
+  settings file register independently, so one that fails on your build
+  costs only itself - previously anything registered after a failure
+  simply never happened, and the mod looked "loaded" with no janitor
+  and no menu.
+- Menu rows are built one by one: a single option the engine refuses to
+  render no longer takes the whole menu down with it.
+- Errors are logged with a stack traceback, and a repeating error is
+  summarised once a minute instead of filling the log.
+- A missing dependency now reports one clear FATAL line instead of
+  failing over and over.
+
+  NOTE, honestly: this catches errors raised by Lua. It cannot catch a
+  native access violation - when the engine reads memory it already
+  freed, the game is gone before any handler runs. Those are avoided by
+  the world-change and teleport guards from v1.2.6, not by this.
+
+===================================================================
 WHAT'S NEW IN v1.2.6
 ===================================================================
 - Fixes the crash when fast travelling between bases.

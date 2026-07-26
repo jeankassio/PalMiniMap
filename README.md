@@ -2,6 +2,26 @@
 PalMiniMap — a live minimap radar for Palworld 1.0+
 Based on Paldar by T3R3NC3B.
 
+WHAT'S NEW IN v1.2.7
+- Error-handling pass over the whole script. Every boundary the mod is
+  entered through (key presses, timers, engine hooks, script load) and
+  every operation that can fail (engine reflection, file IO, JSON) runs
+  inside a guard: the failure is logged and the mod keeps going.
+- Startup is no longer all-or-nothing. Each keybind, each timer and the
+  settings file register independently. Before, anything registered
+  after a failure never happened at all, and the mod would load
+  "successfully" with no janitor and no menu.
+- Menu rows are built individually, so one option the engine refuses to
+  render no longer takes the whole menu down.
+- Errors carry a stack traceback, and a repeating error is summarised
+  once a minute instead of flooding UE4SS.log.
+- A missing dependency reports a single clear FATAL line and disables
+  the mod cleanly instead of failing repeatedly.
+- Limit worth stating plainly: this catches Lua errors. It cannot catch
+  a native access violation - when the engine reads memory it already
+  freed, the process dies before any handler runs. Those are prevented
+  by the world-change and teleport guards, not by this layer.
+
 WHAT'S NEW IN v1.2.6
 - Fixes the crash when fast travelling between bases. A fast travel does
   not reload the world in Palworld (it swaps streaming sublevels), so
