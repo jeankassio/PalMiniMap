@@ -1,0 +1,430 @@
+-- =====================================================================
+-- menu.lua - the F5 configuration window
+--
+-- Ported from the 1.x menu, which was the part users actually touched.
+-- Same interaction model, because it worked: build a UMG window, poll the
+-- controls 4x a second, commit checkboxes immediately and sliders only
+-- after they have rested (dragging a slider used to rewrite the settings
+-- file four times a second - a visible hitch).
+--
+-- Options that existed in 1.x but describe machinery version 2 no longer
+-- has are gone rather than faked: "minimap render resolution" and
+-- "capture LOD bias" configured the scene capture, and there is no scene
+-- capture any more. Everything else carried over, and the axis controls
+-- at the bottom are new - they are the escape hatch if the map texture
+-- orientation ever needs correcting without editing code.
+-- =====================================================================
+
+local guard = require("guard")
+
+local M = {}
+
+local VIS_SHOW, VIS_HIDE = 0, 1     -- ESlateVisibility Visible / Collapsed
+local SLIDER_COMMIT_DELAY = 0.4
+
+local S = {
+    widget = nil, tree = nil,
+    controls = {},
+    open = false,
+    world = "",
+    -- NOT 0: the debounce compares against os.clock(), which is small right
+    -- after the process starts, so a 0 here silently swallows the very first
+    -- key press. Start far enough back that the first press always counts.
+    lastToggle = -1e9,
+}
+
+local UI = {
+    panel   = { R = 0.020, G = 0.028, B = 0.045, A = 0.94 },
+    header  = { R = 0.055, G = 0.105, B = 0.155, A = 0.98 },
+    accent  = { R = 0.33,  G = 0.78,  B = 0.96,  A = 1.0 },
+    dim     = { R = 0.16,  G = 0.34,  B = 0.44,  A = 1.0 },
+    text    = { R = 0.90,  G = 0.93,  B = 0.96,  A = 1.0 },
+    muted   = { R = 0.56,  G = 0.62,  B = 0.70,  A = 1.0 },
+}
+
+-- key, label, kind, and for sliders min/max/step
+local LAYOUT = {
+    { header = "Minimap" },
+    { key = "enabled",          label = "Show minimap",            kind = "bool" },
+    { key = "size",             label = "Size",                    kind = "int", min = 120, max = 480 },
+    { key = "opacity",          label = "Opacity",                 kind = "pct" },
+    { key = "zoom",             label = "Zoom (world units)",      kind = "int", min = 4000, max = 120000, step = 1000 },
+    { key = "rotateWithCamera", label = "Rotate with camera",      kind = "bool" },
+    { key = "iconSize",         label = "Icon size",               kind = "int", min = 10, max = 40 },
+
+    { header = "Pals" },
+    { key = "showPals",         label = "Show pals",               kind = "bool" },
+    { key = "onlyShinyPals",    label = "Only shiny pals",         kind = "bool" },
+    { key = "maxPalIcons",      label = "Max pal icons",           kind = "int", min = 8, max = 128 },
+
+    { header = "Players and points of interest" },
+    { key = "showPlayers",      label = "Show players",            kind = "bool" },
+    { key = "showChests",       label = "Show chests",             kind = "bool" },
+    { key = "showFastTravel",   label = "Show fast travel points", kind = "bool" },
+    { key = "showDungeons",     label = "Show dungeons",           kind = "bool" },
+    { key = "showBaseCamps",    label = "Show base camps",         kind = "bool" },
+
+    { header = "Map orientation (only if the map looks wrong)" },
+    { key = "axis.swapXY",      label = "Swap X / Y",              kind = "bool" },
+    { key = "axis.flipH",       label = "Mirror horizontally",     kind = "bool" },
+    { key = "axis.flipV",       label = "Mirror vertically",       kind = "bool" },
+}
+
+-- ---------------------------------------------------------------
+-- config access, including the nested axis.* keys
+-- ---------------------------------------------------------------
+local function readKey(cfg, key)
+    local a, b = key:match("^(%w+)%.(%w+)$")
+    if a then
+        local t = cfg[a]
+        return type(t) == "table" and t[b] or nil
+    end
+    return cfg[key]
+end
+
+local function writeKey(cfg, key, value)
+    local a, b = key:match("^(%w+)%.(%w+)$")
+    if a then
+        if type(cfg[a]) ~= "table" then cfg[a] = {} end
+        cfg[a][b] = value
+        return
+    end
+    cfg[key] = value
+end
+
+-- ---------------------------------------------------------------
+-- small UMG helpers
+-- ---------------------------------------------------------------
+local function cls(path)
+    local o = guard.get(StaticFindObject, path)
+    if o and guard.alive(o) then return o end
+    return nil
+end
+
+local function make(classPath)
+    local c = cls(classPath)
+    if c == nil then return nil end
+    return guard.get(StaticConstructObject, c, S.tree)
+end
+
+local function text(str, size, colour, justify)
+    local t = make("/Script/UMG.TextBlock")
+    if t == nil then return nil end
+    guard.get(function() t:SetText(FText(str)) end)
+    guard.get(function() t.Font.Size = (size or 14) + 0.0 end)
+    if colour then
+        guard.get(function()
+            t:SetColorAndOpacity({ SpecifiedColor = colour, ColorUseRule = 0 })
+        end)
+    end
+    if justify then guard.get(function() t:SetJustification(justify) end) end
+    return t
+end
+
+local function pad(slot, l, t, r, b)
+    if slot then
+        guard.get(function() slot:SetPadding({ Left = l, Top = t, Right = r, Bottom = b }) end)
+    end
+end
+
+local function fill(slot)
+    if slot then guard.get(function() slot:SetSize({ Value = 1.0, SizeRule = 1 }) end) end
+end
+
+local function align(slot, h, v)
+    if slot == nil then return end
+    if h then guard.get(function() slot:SetHorizontalAlignment(h) end) end
+    if v then guard.get(function() slot:SetVerticalAlignment(v) end) end
+end
+
+local function addRow(scroll, child, t, b)
+    local slot = guard.get(function() return scroll:AddChild(child) end)
+    pad(slot, 6, t or 4, 6, b or 4)
+    return slot
+end
+
+-- ---------------------------------------------------------------
+-- build
+-- ---------------------------------------------------------------
+local function buildRow(scroll, item, cfg)
+    local row = make("/Script/UMG.HorizontalBox")
+    if row == nil then return end
+    local lbl = text(item.label, 14, UI.text, 0)
+    local lblSlot = guard.get(function() return row:AddChild(lbl) end)
+    fill(lblSlot); align(lblSlot, nil, 2)
+
+    local value = readKey(cfg, item.key)
+
+    if item.kind == "bool" then
+        local cb = make("/Script/UMG.CheckBox")
+        if cb == nil then return end
+        guard.get(function() cb:SetIsChecked(value == true) end)
+        align(guard.get(function() return row:AddChild(cb) end), 3, 2)
+        addRow(scroll, row)
+        S.controls[#S.controls + 1] = {
+            key = item.key, kind = "bool", widget = cb,
+            last = (value == true), committed = (value == true),
+        }
+        return
+    end
+
+    -- numeric: slider plus a live readout
+    local isPct = item.kind == "pct"
+    local mn = isPct and 10 or (item.min or 0)
+    local mx = isPct and 100 or (item.max or 100)
+    local shown = isPct and math.floor((tonumber(value) or 1) * 100 + 0.5)
+                         or math.floor((tonumber(value) or mn) + 0.5)
+
+    local box = make("/Script/UMG.SizeBox")
+    local sld = make("/Script/UMG.Slider")
+    if box == nil or sld == nil then return end
+    guard.get(function() box:SetWidthOverride(170.0) end)
+    guard.get(function() box:SetHeightOverride(18.0) end)
+    guard.get(function() sld:SetMinValue(mn + 0.0) end)
+    guard.get(function() sld:SetMaxValue(mx + 0.0) end)
+    guard.get(function() sld:SetValue(shown + 0.0) end)
+    guard.get(function() sld.SliderBarColor = UI.dim end)
+    guard.get(function() sld.SliderHandleColor = UI.accent end)
+    guard.get(function() box:AddChild(sld) end)
+    align(guard.get(function() return row:AddChild(box) end), 3, 2)
+
+    local readout = text(tostring(shown), 13, UI.accent, 2)
+    local rbox = make("/Script/UMG.SizeBox")
+    if rbox ~= nil then
+        guard.get(function() rbox:SetWidthOverride(66.0) end)
+        guard.get(function() rbox:AddChild(readout) end)
+        local rslot = guard.get(function() return row:AddChild(rbox) end)
+        pad(rslot, 10, 0, 0, 0); align(rslot, 3, 2)
+    end
+
+    addRow(scroll, row, 5, 5)
+    S.controls[#S.controls + 1] = {
+        key = item.key, kind = isPct and "pct" or "int",
+        widget = sld, readout = readout,
+        min = mn, max = mx, step = item.step,
+        last = shown, committed = shown,
+    }
+end
+
+function M.build(pc, cfg)
+    S.controls = {}
+    local wbl = cls("/Script/UMG.Default__WidgetBlueprintLibrary")
+    local uw = cls("/Script/UMG.UserWidget")
+    if wbl == nil or uw == nil then return false end
+
+    local world = guard.get(function() return pc:GetWorld() end)
+    local widget = guard.get(function() return wbl:Create(world, uw, pc) end)
+    if not guard.alive(widget) then return false end
+    S.widget = widget
+    S.tree = guard.get(function() return widget.WidgetTree end)
+    if S.tree == nil then return false end
+
+    local canvas = make("/Script/UMG.CanvasPanel")
+    if canvas == nil then return false end
+    guard.get(function() S.tree.RootWidget = canvas end)
+
+    local w, h = 560.0, 700.0
+    local ok, vx, vy = guard.try("menu viewport size", function()
+        return pc:GetViewportSize()
+    end)
+    if ok and type(vx) == "number" and vx > 0 then
+        w = math.max(480.0, vx * 0.30)
+        h = math.max(560.0, vy * 0.82)
+    end
+
+    local sizeBox = make("/Script/UMG.SizeBox")
+    if sizeBox == nil then return false end
+    guard.get(function() sizeBox:SetWidthOverride(w) end)
+    guard.get(function() sizeBox:SetHeightOverride(h) end)
+    local cslot = guard.get(function() return canvas:AddChild(sizeBox) end)
+    guard.get(function() cslot:SetAutoSize(true) end)
+    guard.get(function() cslot:SetPosition({ X = 40.0, Y = 60.0 }) end)
+
+    local border = make("/Script/UMG.Border")
+    if border ~= nil then
+        guard.get(function() border:SetBrushColor(UI.panel) end)
+        guard.get(function() border:SetPadding({ Left = 14, Top = 12, Right = 14, Bottom = 12 }) end)
+        guard.get(function() sizeBox:AddChild(border) end)
+    end
+
+    local scroll = make("/Script/UMG.ScrollBox")
+    if scroll == nil then return false end
+    guard.get(function() (border or sizeBox):AddChild(scroll) end)
+
+    local head = make("/Script/UMG.Border")
+    if head ~= nil then
+        guard.get(function() head:SetBrushColor(UI.header) end)
+        guard.get(function() head:SetPadding({ Left = 14, Top = 10, Right = 14, Bottom = 10 }) end)
+        local vbox = make("/Script/UMG.VerticalBox")
+        if vbox ~= nil then
+            guard.get(function() head:AddChild(vbox) end)
+            guard.get(function() vbox:AddChild(text("PalMiniMap 2", 24, UI.accent, 0)) end)
+            guard.get(function() vbox:AddChild(text("[ F5 ] close   [ F3 ] show/hide   [ F2 ] corner   [ +/- ] zoom",
+                                                    11, UI.muted, 0)) end)
+        end
+        pad(guard.get(function() return scroll:AddChild(head) end), 0, 0, 0, 8)
+    end
+
+    -- Each row builds inside its own guard: one option the engine refuses
+    -- to render must not take the whole menu down with it.
+    for _, item in ipairs(LAYOUT) do
+        guard.try("menu row '" .. tostring(item.header or item.key) .. "'", function()
+            if item.header then
+                pad(guard.get(function()
+                    return scroll:AddChild(text(string.upper(item.header), 13, UI.accent, 0))
+                end), 2, 14, 2, 5)
+            else
+                buildRow(scroll, item, cfg)
+            end
+        end)
+    end
+
+    pad(guard.get(function()
+        return scroll:AddChild(text("Changes save and apply instantly.", 12, UI.muted, 1))
+    end), 6, 14, 6, 10)
+    return true
+end
+
+-- ---------------------------------------------------------------
+-- open / close
+-- ---------------------------------------------------------------
+local function drop()
+    S.widget, S.tree = nil, nil
+    S.controls = {}
+    S.open = false
+end
+
+function M.isOpen() return S.open end
+
+function M.usable()
+    return S.open and S.widget ~= nil and guard.alive(S.widget)
+end
+
+function M.close(pc)
+    if not S.open then return end
+    if M.onCommit then guard.try("menu flush", function() M.flush() end) end
+    if S.widget ~= nil and guard.alive(S.widget) then
+        guard.get(function() S.widget:RemoveFromParent() end)
+    end
+    drop()
+    if pc ~= nil and guard.alive(pc) then
+        guard.get(function()
+            local wbl = cls("/Script/UMG.Default__WidgetBlueprintLibrary")
+            if wbl then wbl:SetInputMode_GameOnly(pc) end
+            pc.bShowMouseCursor = false
+        end)
+    end
+    guard.log("menu closed")
+end
+
+function M.open(pc, cfg, worldName)
+    if S.open then return end
+    if pc == nil or not guard.alive(pc) then
+        guard.log("menu not opened: no player controller")
+        return
+    end
+    local ok = guard.try("buildMenu", function()
+        if not M.build(pc, cfg) then error("could not build the menu widget") end
+        guard.get(function() S.widget:AddToViewport(99) end)
+        guard.get(function()
+            local wbl = cls("/Script/UMG.Default__WidgetBlueprintLibrary")
+            if wbl then wbl:SetInputMode_GameAndUIEx(pc, S.widget, 0, false) end
+            pc.bShowMouseCursor = true
+        end)
+    end)
+    if not ok then
+        if S.widget ~= nil and guard.alive(S.widget) then
+            guard.get(function() S.widget:RemoveFromParent() end)
+        end
+        drop()
+        return
+    end
+    S.open = true
+    S.world = worldName or ""
+    guard.log("menu opened")
+end
+
+function M.toggle(pc, cfg, worldName)
+    if (os.clock() - S.lastToggle) < 0.3 then return end
+    S.lastToggle = os.clock()
+    if S.open and not M.usable() then drop() end
+    if S.open then M.close(pc) else M.open(pc, cfg, worldName) end
+end
+
+function M.worldChanged(worldName)
+    if S.open and S.world ~= "" and S.world ~= worldName then drop() end
+end
+
+-- ---------------------------------------------------------------
+-- polling
+--
+-- M.onCommit(changedKeys) is set by main.lua and is where the live
+-- effects happen (rebuild the widget on a size change, re-lay out on a
+-- position change, and so on).
+-- ---------------------------------------------------------------
+M.onCommit = nil
+
+local function toStored(c, shown)
+    if c.kind == "pct" then return shown / 100.0 end
+    return shown
+end
+
+local function commit(cfg, pending)
+    if #pending == 0 then return end
+    local keys = {}
+    for _, item in ipairs(pending) do
+        item.c.committed = item.value
+        writeKey(cfg, item.c.key, toStored(item.c, item.value))
+        keys[#keys + 1] = item.c.key
+    end
+    if M.onCommit then
+        guard.try("menu onCommit", function() M.onCommit(keys) end)
+    end
+end
+
+function M.flush()
+    local cfg = M.cfg
+    if cfg == nil then return end
+    local pending = {}
+    for _, c in ipairs(S.controls) do
+        if c.last ~= nil and c.last ~= c.committed then
+            pending[#pending + 1] = { c = c, value = c.last }
+        end
+    end
+    commit(cfg, pending)
+end
+
+function M.poll(cfg)
+    M.cfg = cfg
+    if not S.open then return end
+    if not M.usable() then drop(); return end
+    local now = os.clock()
+    local pending = {}
+    for _, c in ipairs(S.controls) do
+        local ok, cur = guard.try("read control " .. c.key, function()
+            if c.kind == "bool" then return c.widget:IsChecked() end
+            local v = math.floor(c.widget:GetValue() + 0.5)
+            if c.step and c.step > 1 then v = math.floor(v / c.step + 0.5) * c.step end
+            if c.min and v < c.min then v = c.min end
+            if c.max and v > c.max then v = c.max end
+            return v
+        end)
+        if ok and cur ~= nil then
+            if cur ~= c.last then
+                c.last = cur
+                c.changedAt = now
+                if c.readout then
+                    guard.get(function() c.readout:SetText(FText(tostring(cur))) end)
+                end
+            end
+            local isSlider = (c.kind ~= "bool")
+            if cur ~= c.committed
+               and (not isSlider or (now - (c.changedAt or 0)) >= SLIDER_COMMIT_DELAY) then
+                pending[#pending + 1] = { c = c, value = cur }
+            end
+        end
+    end
+    commit(cfg, pending)
+end
+
+return M
