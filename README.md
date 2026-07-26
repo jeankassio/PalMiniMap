@@ -2,6 +2,25 @@
 PalMiniMap — a live minimap radar for Palworld 1.0+
 Based on Paldar by T3R3NC3B.
 
+WHAT'S NEW IN v1.2.6
+- Fixes the crash when fast travelling between bases. A fast travel does
+  not reload the world in Palworld (it swaps streaming sublevels), so
+  none of the world-change safeguards fired while every actor a minimap
+  icon is attached to was being destroyed. The 20 s sweep that looked for
+  collected chest/egg/note/effigy icons walked those icons straight
+  through the teardown and eventually read freed memory. Confirmed from
+  the crash dump: the fault landed exactly on a sweep tick, reading
+  address 0x1b, with a callstack made only of UE4SS Lua frames.
+- That sweep is removed. The minimap blueprint already destroys and
+  rebuilds all four of those icon lists on every rescan, so collected
+  items still disappear on their own; the sweep only made it a few
+  seconds faster.
+- The remaining icon passes pause for 12 s whenever a teleport or a
+  loading screen is detected (pawn missing, or the pawn jumping further
+  than anything in the game can travel).
+- The player pawn is read with a direct engine call instead of the
+  UEHelpers path, which walked the entire UObject array on every call.
+
 WHAT'S NEW IN v1.2.5
 - Fixes the FPS decay reported when staying in one area for a long time
   (and the occasional crash on alt-tab that came with it). The pal icon

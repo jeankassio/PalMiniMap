@@ -52,6 +52,26 @@ UNINSTALL
 Delete the files listed above (and the two PalMiniMap folders).
 
 ===================================================================
+WHAT'S NEW IN v1.2.6
+===================================================================
+- Fixes the crash when fast travelling between bases.
+  A fast travel does not reload the world in Palworld - it swaps
+  streaming sublevels - so the mod's world-change safeguards never
+  fired, while every actor a minimap icon is attached to was being
+  destroyed underneath it. The 20-second sweep that looked for
+  collected chest/egg/note/effigy icons was walking those icons right
+  through the teardown and eventually read freed memory.
+  That sweep has been removed entirely: the minimap blueprint already
+  destroys and rebuilds all four of those icon lists on every rescan,
+  so collected items still disappear on their own - the sweep only
+  made it a few seconds faster, at the price of the crash.
+- The remaining icon passes now pause for 12 seconds whenever a
+  teleport or a loading screen is detected (player pawn missing, or
+  the pawn jumping further than anything in the game can travel).
+- The pawn is read through a direct engine call instead of the helper
+  that scans the whole object list on every single call.
+
+===================================================================
 WHAT'S NEW IN v1.2.5
 ===================================================================
 - Fixes the FPS decay when you stay in one area for a long time, and the

@@ -39,7 +39,7 @@ local BACKUP_PATH = SCRIPT_DIRECTORY and (SCRIPT_DIRECTORY .. "/../user_settings
 -- updates. New keys from future versions are merged in while preserving
 -- the user's values.
 local DEFAULTS_JSON = [==[
-{"note":"THIS JSON FILE WAS CREATED USING THE `DekModConfigMenu` MOD FOR PALWORLD! DO NOT MANUALLY EDIT THIS FILE UNLESS YOU KNOW WHAT YOU'RE DOING -- USE THE `DekModConfigMenu` MOD INSTEAD <3","meta":{"game":false,"vers":"1.2.5","auth":"T3R3NC3B","desc":"PalMiniMap (based on Paldar by T3R3NC3B) - a minimap radar that displays live pal positions and more. Updated for Palworld 1.0 By Jean Kassio.","link":{"nexus-mod-id":"879","curse-slug":"blueprint-code-mods/paldar-mini-map-radar","donate":""}},"General Settings":{"type":"header","desc":"Configure general settings."},"Enable mod":{"type":"boolean","desc":"Enable/disable the entire Paldar mod.","init":true,"live":true},"Minimap render resolution":{"type":"integer","desc":"Lower numbers for better performance, at the cost of quality.","flag":"","opts":{"min":32,"max":2048,"step":1},"init":512,"live":512},"Minimap opacity":{"type":"integer","desc":"Adjust transparency of the whole minimap.","flag":"","opts":{"min":1,"max":100,"step":1},"init":100,"live":100},"Minimap shape":{"type":"option","desc":"Change minimap shape to circular or square.","opts":["Circle","Square"],"init":"Square","live":"Square"},"Minimap autozoom while moving":{"type":"boolean","desc":"Auto zoom out minimap to different levels when walking, running & flying.","init":true,"live":true},"Minimap rotation lock":{"type":"boolean","desc":"Lock minimap rotation to north, player icon rotates instead.","init":false,"live":false},"Lock all icon rotations to north":{"type":"boolean","desc":"Locks all icons (excluding pals & NPCs) to be upright (north).","init":false,"live":false},"Autohide minimap while in base camps":{"type":"boolean","desc":"Hide minimap while in player base camps.","init":false,"live":false},"Hide collected items from minimap":{"type":"boolean","desc":"Remove chest, egg, note and lifmunk effigy icons from the minimap once you collect them (they disappear from the world).","init":true,"live":true},"Pal Locations":{"type":"header","desc":"Configure settings for displaying Pals."},"Show pal positions":{"type":"boolean","desc":"Show Pals around the player on the minimap.","init":true,"live":true},"Only show shiny pals":{"type":"boolean","desc":"Only shows shiny Pals around the player on the minimap.","init":false,"live":false},"Show pal icons while megazoomed out":{"type":"boolean","desc":"Keep Pal icons visible on the minimap while in megazoomed out mode.","init":false,"live":false},"NPCs and Points of Interest":{"type":"header","desc":"Customize display settings for NPCs and points of interest."},"Show NPC humans":{"type":"boolean","desc":"Show NPC humans on the minimap.","init":true,"live":true},"Show player base camps":{"type":"boolean","desc":"Show player base camps on the minimap.","init":true,"live":true},"Show player death locations":{"type":"boolean","desc":"Show player death locations on the minimap.","init":true,"live":true},"Show other players":{"type":"boolean","desc":"Show other players around the player on the minimap.","init":true,"live":true},"Show dungeons":{"type":"boolean","desc":"Show dungeon locations on the minimap.","init":true,"live":true},"Chests, Notes, and Other":{"type":"header","desc":"Customize display settings for chests, notes, and other entities."},"Show chests":{"type":"boolean","desc":"Show chests around the player on the minimap.","init":true,"live":true},"Show notes":{"type":"boolean","desc":"Show notes around the player on the minimap.","init":true,"live":true},"Show eggs":{"type":"boolean","desc":"Show eggs around the player on the minimap.","init":true,"live":true},"Show fast travel points":{"type":"boolean","desc":"Show fast travel points on the minimap.","init":true,"live":true},"Show skillfruit trees":{"type":"boolean","desc":"Show skillfruit trees around the player on the minimap.","init":true,"live":true},"Show lifmunk effigies":{"type":"boolean","desc":"Show Lifmunk Effigies around the player on the minimap.","init":false,"live":false},"Scan Frequencies":{"type":"header","desc":"Adjust scanning frequencies for various entities."},"Pal rescan rate":{"type":"integer","desc":"How often the radar will scan for new Pals around the player. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":5,"live":5},"Players rescan frequency":{"type":"integer","desc":"How often the radar will scan for NEW players (not refresh rate of current players). In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":12,"live":12},"Human NPC rescan frequency":{"type":"integer","desc":"How often the radar will scan for NPC humans around the player on the minimap. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":19,"live":19},"Chest rescan frequency":{"type":"integer","desc":"How often the radar will scan for chests around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Egg rescan frequency":{"type":"integer","desc":"How often the radar will scan for eggs around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Keybinds":{"type":"header","desc":"Customize keyboard shortcuts."},"Megazoom mode toggle keybind":{"type":"keybind","desc":"Set keybind for megazoom out mode toggle. Hold this key and press + or - to fine-zoom the minimap.","init":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Cycle default minimap positions keybind":{"type":"keybind","desc":"Set keybind for cycling between default minimap positions.","init":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Show/hide minimap toggle keybind":{"type":"keybind","desc":"Show/hide minimap toggle keyboard button.","init":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Customize minimap keybind":{"type":"keybind","desc":"Set keybind to enter customization mode - move with arrow keys, resize with + and - keys.","init":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Use new minimap edit mode size method":{"type":"boolean","desc":"ON: resize minimap in edit mode with mouse scroll wheel (BROKEN on Palworld 1.0). OFF (default): resize with + and - keys (also 9 and 0).","init":false,"live":false},"Minimap capture LOD bias":{"type":"integer","desc":"Renders the minimap terrain with cheaper detail levels. 1 = original, higher = faster. Barely visible on the small map.","flag":"","opts":{"min":1,"max":8,"step":1},"init":3,"live":3}}
+{"note":"THIS JSON FILE WAS CREATED USING THE `DekModConfigMenu` MOD FOR PALWORLD! DO NOT MANUALLY EDIT THIS FILE UNLESS YOU KNOW WHAT YOU'RE DOING -- USE THE `DekModConfigMenu` MOD INSTEAD <3","meta":{"game":false,"vers":"1.2.6","auth":"T3R3NC3B","desc":"PalMiniMap (based on Paldar by T3R3NC3B) - a minimap radar that displays live pal positions and more. Updated for Palworld 1.0 By Jean Kassio.","link":{"nexus-mod-id":"879","curse-slug":"blueprint-code-mods/paldar-mini-map-radar","donate":""}},"General Settings":{"type":"header","desc":"Configure general settings."},"Enable mod":{"type":"boolean","desc":"Enable/disable the entire Paldar mod.","init":true,"live":true},"Minimap render resolution":{"type":"integer","desc":"Lower numbers for better performance, at the cost of quality.","flag":"","opts":{"min":32,"max":2048,"step":1},"init":512,"live":512},"Minimap opacity":{"type":"integer","desc":"Adjust transparency of the whole minimap.","flag":"","opts":{"min":1,"max":100,"step":1},"init":100,"live":100},"Minimap shape":{"type":"option","desc":"Change minimap shape to circular or square.","opts":["Circle","Square"],"init":"Square","live":"Square"},"Minimap autozoom while moving":{"type":"boolean","desc":"Auto zoom out minimap to different levels when walking, running & flying.","init":true,"live":true},"Minimap rotation lock":{"type":"boolean","desc":"Lock minimap rotation to north, player icon rotates instead.","init":false,"live":false},"Lock all icon rotations to north":{"type":"boolean","desc":"Locks all icons (excluding pals & NPCs) to be upright (north).","init":false,"live":false},"Autohide minimap while in base camps":{"type":"boolean","desc":"Hide minimap while in player base camps.","init":false,"live":false},"Hide collected items from minimap":{"type":"boolean","desc":"Remove chest, egg, note and lifmunk effigy icons from the minimap once you collect them (they disappear from the world).","init":true,"live":true},"Pal Locations":{"type":"header","desc":"Configure settings for displaying Pals."},"Show pal positions":{"type":"boolean","desc":"Show Pals around the player on the minimap.","init":true,"live":true},"Only show shiny pals":{"type":"boolean","desc":"Only shows shiny Pals around the player on the minimap.","init":false,"live":false},"Show pal icons while megazoomed out":{"type":"boolean","desc":"Keep Pal icons visible on the minimap while in megazoomed out mode.","init":false,"live":false},"NPCs and Points of Interest":{"type":"header","desc":"Customize display settings for NPCs and points of interest."},"Show NPC humans":{"type":"boolean","desc":"Show NPC humans on the minimap.","init":true,"live":true},"Show player base camps":{"type":"boolean","desc":"Show player base camps on the minimap.","init":true,"live":true},"Show player death locations":{"type":"boolean","desc":"Show player death locations on the minimap.","init":true,"live":true},"Show other players":{"type":"boolean","desc":"Show other players around the player on the minimap.","init":true,"live":true},"Show dungeons":{"type":"boolean","desc":"Show dungeon locations on the minimap.","init":true,"live":true},"Chests, Notes, and Other":{"type":"header","desc":"Customize display settings for chests, notes, and other entities."},"Show chests":{"type":"boolean","desc":"Show chests around the player on the minimap.","init":true,"live":true},"Show notes":{"type":"boolean","desc":"Show notes around the player on the minimap.","init":true,"live":true},"Show eggs":{"type":"boolean","desc":"Show eggs around the player on the minimap.","init":true,"live":true},"Show fast travel points":{"type":"boolean","desc":"Show fast travel points on the minimap.","init":true,"live":true},"Show skillfruit trees":{"type":"boolean","desc":"Show skillfruit trees around the player on the minimap.","init":true,"live":true},"Show lifmunk effigies":{"type":"boolean","desc":"Show Lifmunk Effigies around the player on the minimap.","init":false,"live":false},"Scan Frequencies":{"type":"header","desc":"Adjust scanning frequencies for various entities."},"Pal rescan rate":{"type":"integer","desc":"How often the radar will scan for new Pals around the player. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":5,"live":5},"Players rescan frequency":{"type":"integer","desc":"How often the radar will scan for NEW players (not refresh rate of current players). In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":12,"live":12},"Human NPC rescan frequency":{"type":"integer","desc":"How often the radar will scan for NPC humans around the player on the minimap. In seconds.","flag":"","opts":{"min":1,"max":60,"step":1},"init":19,"live":19},"Chest rescan frequency":{"type":"integer","desc":"How often the radar will scan for chests around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Egg rescan frequency":{"type":"integer","desc":"How often the radar will scan for eggs around the player on the minimap. In seconds.","flag":"","opts":{"min":5,"max":60,"step":1},"init":14,"live":14},"Keybinds":{"type":"header","desc":"Customize keyboard shortcuts."},"Megazoom mode toggle keybind":{"type":"keybind","desc":"Set keybind for megazoom out mode toggle. Hold this key and press + or - to fine-zoom the minimap.","init":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"Z","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Cycle default minimap positions keybind":{"type":"keybind","desc":"Set keybind for cycling between default minimap positions.","init":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"L","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Show/hide minimap toggle keybind":{"type":"keybind","desc":"Show/hide minimap toggle keyboard button.","init":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"H","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Customize minimap keybind":{"type":"keybind","desc":"Set keybind to enter customization mode - move with arrow keys, resize with + and - keys.","init":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false},"live":{"key":"K","bShift":false,"bCtrl":false,"bAlt":false,"bCmd":false}},"Use new minimap edit mode size method":{"type":"boolean","desc":"ON: resize minimap in edit mode with mouse scroll wheel (BROKEN on Palworld 1.0). OFF (default): resize with + and - keys (also 9 and 0).","init":false,"live":false},"Minimap capture LOD bias":{"type":"integer","desc":"Renders the minimap terrain with cheaper detail levels. 1 = original, higher = faster. Barely visible on the small map.","flag":"","opts":{"min":1,"max":8,"step":1},"init":3,"live":3}}
 ]==]
 
 -- The stock blueprint reads these four keybind entries from the modconfig
@@ -545,6 +545,101 @@ applyMinimapVisualSettings = function(actor, force)
 end
 
 -- ---------------------------------------------------------------
+-- Teleport / streaming guard
+--
+-- A fast travel keeps the same UWorld: only streaming sublevels are swapped,
+-- so worldName never changes, RegisterLoadMapPreHook never fires, and the
+-- cached ModActor stays valid. Meanwhile every actor an icon is attached to is
+-- destroyed and recreated. Any pass that dereferences an icon's target actor
+-- during that window can hit freed memory, and a native access violation is
+-- not catchable from Lua -- so instead of trying to survive it, we stay out of
+-- it. Two signals, both cheap:
+--   * no player pawn -> a loading screen / respawn is in progress;
+--   * the pawn moved further between checks than anything in the game can
+--     travel -> we just teleported, and the destination is still streaming in.
+-- Either one silences the icon passes for TELEPORT_QUIET_SECONDS.
+-- ---------------------------------------------------------------
+local TELEPORT_QUIET_SECONDS = 12
+local TELEPORT_JUMP_UU = 20000        -- 200 m between checks; unreachable normally
+local quietUntil = 0.0
+local lastPawnX, lastPawnY, lastPawnZ = nil, nil, nil
+
+-- NOT UEHelpers.GetPlayerController(): that runs FindAllOf("PlayerController"),
+-- a full walk of the UObject array, on every single call. This gate runs every
+-- janitor pass, so it goes straight through UGameplayStatics instead -- one
+-- native call, using the minimap actor we already hold as the world context.
+local gameplayStatics = nil
+local pawnQueryBroken = false
+
+-- Returns pawn, queryWorked. The second value matters: "there is no pawn" and
+-- "this build cannot tell me" must not be treated the same, or a reflection
+-- failure would silence every icon pass forever instead of just this one.
+local function getPlayerPawn(worldContext)
+    if not isAlive(worldContext) then return nil, false end
+    local pawn = nil
+    local ok = pcall(function()
+        if gameplayStatics == nil or not gameplayStatics:IsValid() then
+            gameplayStatics = StaticFindObject("/Script/Engine.Default__GameplayStatics")
+        end
+        if gameplayStatics == nil then error("GameplayStatics unavailable") end
+        pawn = gameplayStatics:GetPlayerPawn(worldContext, 0)
+    end)
+    if not ok then
+        if not pawnQueryBroken then
+            pawnQueryBroken = true
+            log("warning: the player pawn cannot be queried on this build; " ..
+                "the teleport guard is off and the icon passes run unguarded")
+        end
+        return nil, false
+    end
+    if isAlive(pawn) then return pawn, true end
+    return nil, true
+end
+
+local function beQuiet(reason)
+    quietUntil = os.clock() + TELEPORT_QUIET_SECONDS
+    if reason then
+        log("pausing icon maintenance for " .. TELEPORT_QUIET_SECONDS .. "s: " .. reason)
+    end
+end
+
+-- Runs on the world tick: watches for the position jump. Kept separate from the
+-- gate below so the jump is sampled on a steady cadence.
+local function watchForTeleport(worldContext)
+    local pawn = getPlayerPawn(worldContext)
+    if pawn == nil then
+        lastPawnX, lastPawnY, lastPawnZ = nil, nil, nil
+        return
+    end
+    local x, y, z
+    local ok = pcall(function()
+        local loc = pawn:K2_GetActorLocation()
+        x, y, z = loc.X, loc.Y, loc.Z
+    end)
+    if not ok or type(x) ~= "number" then return end
+    if lastPawnX ~= nil then
+        local dx, dy, dz = x - lastPawnX, y - lastPawnY, z - lastPawnZ
+        if (dx * dx + dy * dy + dz * dz) > (TELEPORT_JUMP_UU * TELEPORT_JUMP_UU) then
+            beQuiet("teleport detected")
+        end
+    end
+    lastPawnX, lastPawnY, lastPawnZ = x, y, z
+end
+
+-- Gate for anything that dereferences icon components or their target actors.
+-- `worldContext` is the minimap actor, which every caller already has.
+local function iconWorkAllowed(worldContext)
+    if os.clock() < quietUntil then return false end
+    local pawn, queryWorked = getPlayerPawn(worldContext)
+    if queryWorked and pawn == nil then
+        -- genuinely no pawn: loading screen, death respawn, world transition
+        beQuiet(nil)
+        return false
+    end
+    return true   -- we have a pawn, or we simply cannot tell
+end
+
+-- ---------------------------------------------------------------
 -- Icon janitor: destroys orphaned pal icon components and resets the
 -- tracking arrays when they desync or grow too large. This is the fix
 -- for the "FPS drops after staying in camp" issue from original Paldar.
@@ -557,7 +652,7 @@ local desyncStreak = 0           -- consecutive passes seen desynced
 local countResetsDisabled = false -- set once we learn Empty() can't clear arrays
 local worldName = ""             -- current world; updated by the world tick loop.
                                  -- MUST be declared here (above janitorPass /
-                                 -- sweepCollectedIcons / hideCollectedObtainables) so
+                                 -- hideCollectedObtainables) so
                                  -- their "NON_GAME_WORLDS[worldName]" guard reads this
                                  -- upvalue and not a nil global.
 
@@ -753,6 +848,11 @@ local function janitorPass()
 
     if desynced then desyncStreak = desyncStreak + 1 else desyncStreak = 0 end
 
+    -- Reading the array lengths above is safe (no element is dereferenced).
+    -- Everything past this point touches the components themselves, so it waits
+    -- until the world is settled again.
+    if not iconWorkAllowed(actor) then return end
+
     if not countResetsDisabled then
         local coolOk = (now - lastCountReset) >= COUNT_RESET_COOLDOWN
 
@@ -799,17 +899,30 @@ end
 -- egg, note, lifmunk effigy) is picked up, its world actor despawns.
 -- Each minimap icon is a StaticMeshComponent attached to that actor's
 -- root, so a collected item leaves an ORPHANED icon (its attach parent
--- is gone) -- exactly the condition the pal orphan sweep already cleans.
--- We destroy those orphans across the collectible icon arrays so obtained
--- items disappear from the minimap on their own. No pickup-event hooks
--- needed; this just reflects world truth.
--- NOTE: relies on the item actually despawning when obtained. Types that
--- linger in the world after use are not affected (would need per-type
--- state detection).
+-- is gone).
+--
+-- REMOVED IN v1.2.6 -- there used to be a `sweepCollectedIcons()` here, on a
+-- 20 s loop, walking eggicons / EffigyIcons / notesIcons / mapIcon_CHESTS to
+-- hide those orphans. Two reasons it is gone:
+--
+--  1. It was redundant. The decompiled blueprint rebuilds all four of those
+--     arrays from scratch on every rescan ("destroy every component in a loop,
+--     then Array_Clear", every ~14 s per the rescan-frequency settings). A
+--     collected item despawns, so the next rescan simply does not re-add its
+--     icon. The sweep only made that a few seconds faster.
+--  2. It crashed the game. Those icons attach to actors that live in STREAMING
+--     sublevels, and a fast travel tears those down wholesale. Walking the
+--     arrays during the teardown dereferences components whose target actor is
+--     already gone -- a native access violation pcall cannot catch. The
+--     "crashed fast travelling between bases" report landed on exactly one of
+--     these ticks: last sweep logged at 11:27:12.554, loop period 20 s,
+--     EXCEPTION_ACCESS_VIOLATION reading 0x1b at 11:27:32 with a callstack
+--     made entirely of UE4SS Lua frames called from the game thread.
+--
+-- Fast travel is NOT a LoadMap in Palworld -- the UWorld, worldName and our
+-- cached ModActor all survive it -- so RegisterLoadMapPreHook never fires and
+-- none of the world-change guards below help. That is why this had to go.
 -- ---------------------------------------------------------------
-local COLLECTIBLE_ICON_ARRAYS = {
-    "eggicons", "EffigyIcons", "notesIcons", "mapIcon_CHESTS",
-}
 
 -- ---------------------------------------------------------------
 -- Collected Lifmunk Effigies and notes: unlike chests and eggs, a
@@ -888,28 +1001,6 @@ local function actorHiddenInWorld(owner)
     return result
 end
 
-local function sweepCollectedIcons()
-    if worldName == "" or NON_GAME_WORLDS[worldName] then return end
-    if not cfgBool("Hide collected items from minimap", true) then return end
-    local actor = getModActor()
-    if not actor then return end
-    
-    for _, arrName in ipairs(COLLECTIBLE_ICON_ARRAYS) do
-        local removed = 0
-        pcall(function()
-            local arr = actor[arrName]
-            if not arr then return end
-            arr:ForEach(function(_, elem)
-                local ok, didHide = pcall(hideIfOrphaned, elem)
-                if ok and didHide then removed = removed + 1 end
-            end)
-        end)
-        if removed > 0 then
-            log(string.format("hid %d collected-item icon(s) from '%s'", removed, arrName))
-        end
-    end
-end
-
 local function processCollectible(comp, enabled, classHint)
     if not (comp and comp:IsValid()) then return 0, 0 end
     local visible = comp:IsVisible()
@@ -948,6 +1039,9 @@ local function hideCollectedObtainables()
     if worldName == "" or NON_GAME_WORLDS[worldName] then return end
     local actor = getModActor()
     if not actor then return end
+    -- walks icons AND their target actors: the single deepest dereference chain
+    -- in this script, so it never runs while the world is streaming
+    if not iconWorkAllowed(actor) then return end
     local enabled = cfgBool("Hide collected items from minimap", true)
     
     for _, entry in ipairs(PERSISTENT_COLLECTIBLES) do
@@ -1707,23 +1801,13 @@ LoopAsync(COUNT_CHECK_MS, function()
     return false
 end)
 
--- Remove ícones despawnados.
--- CADENCE MATTERS FOR STABILITY: these two loops walk the blueprint's icon
--- TArrays through UE4SS reflection. If the blueprint destroyed an icon and left
--- a stale entry behind, `elem:get()` dereferences it *before* we can call
--- IsValid() -- that is a native access violation which pcall CANNOT catch (the
--- crash dump showed exactly that: GameThread, all UE4SS frames, reading
--- 0xffffffffffffffff). Running this every ~3 s multiplied the exposure, so it is
--- back to a slow cadence: an icon lingering a few extra seconds is a far better
--- trade than a crash. The two loops are staggered so they never land together.
-LoopAsync(20000, function()
-    pcall(ExecuteInGameThread, function()
-        runGuarded("sweepCollectedIcons", sweepCollectedIcons)
-    end)
-    return false
-end)
-
--- Esconde ícones persistentes já coletados - Desacoplado do loop acima
+-- Hides effigies/notes already collected. This is the ONLY remaining pass that
+-- walks icon arrays and their target actors (the 20 s orphan sweep that used to
+-- sit here was removed in v1.2.6 -- see the long note above processCollectible:
+-- it duplicated work the blueprint already does and it was the fast-travel
+-- crash). CADENCE MATTERS FOR STABILITY: every walk dereferences entries the
+-- blueprint may have destroyed, and a native access violation cannot be caught
+-- by pcall, so this stays slow and is gated by iconWorkAllowed().
 LoopAsync(23000, function()
     pcall(ExecuteInGameThread, function()
         runGuarded("hideCollectedObtainables", hideCollectedObtainables)
@@ -1768,6 +1852,11 @@ LoopAsync(3000, function()
             if NON_GAME_WORLDS[name] then return end
             local actor = getModActor()
             if actor then
+                -- A fast travel does not change the world, so this tick is the
+                -- only place that can notice one: sample the pawn every 3 s and
+                -- silence the icon passes when it jumps (or vanishes behind a
+                -- loading screen).
+                watchForTeleport(actor)
                 pcall(function() applyMinimapVisualSettings(actor, false) end)
                 pcall(function() applyEditModeLocalization(actor, false) end)
                 -- once the minimap actor exists in a real world, make its
