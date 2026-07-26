@@ -69,15 +69,23 @@ end
 -- Quiet variant for reflection reads that are EXPECTED to fail sometimes
 -- (a property missing on this build, an object that just died). Returns the
 -- value or nil - never logs, because logging these would be noise.
+--
+-- PASS ARGUMENTS, DO NOT CLOSE OVER THEM. `M.get(function() return a:X() end)`
+-- allocates a fresh closure on every call; `M.get(getX, a)` allocates
+-- nothing. On the hot paths - every icon, every strip, every actor in a
+-- scan - that difference is thousands of garbage objects a second, and the
+-- collector running through them is felt as stutter.
 function M.get(fn, ...)
     local ok, v = pcall(fn, ...)
     if ok then return v end
     return nil
 end
 
+local function callIsValid(o) return o:IsValid() end
+
 function M.alive(obj)
     if obj == nil then return false end
-    local ok, valid = pcall(function() return obj:IsValid() end)
+    local ok, valid = pcall(callIsValid, obj)
     return ok and valid == true
 end
 

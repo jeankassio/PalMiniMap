@@ -184,9 +184,46 @@ local function reportTextureSize(tex, cfg, imagePx, size)
         size / math.max(texels, 0.001), cfg.mapQuality or 0))
 end
 
+-- ---------------------------------------------------------------
+-- Reflection setters, allocation-free
+--
+-- The obvious way to write these is
+--     guard.get(function() slot:SetPosition({ X = x, Y = y }) end)
+-- and that allocates TWO garbage objects per call: the closure and the
+-- vector table. A single frame repositions the map (or 24 clipped strips),
+-- the player marker and up to 96 icons, ten times a second - several
+-- thousand throwaway objects a second, all of them collected on the game
+-- thread. That was a large part of the 2.0.8 stuttering.
+--
+-- So: hoisted functions called through pcall(fn, args), and ONE shared
+-- vector table refilled in place. UE4SS reads X/Y out of it during the
+-- call and does not keep a reference, so reuse is safe.
+-- ---------------------------------------------------------------
+local VEC = { X = 0.0, Y = 0.0 }
+
+local function rawSetPosition(slot, x, y)
+    VEC.X = x; VEC.Y = y
+    slot:SetPosition(VEC)
+end
+
+local function rawSetSize(slot, w, h)
+    VEC.X = w; VEC.Y = h
+    slot:SetSize(VEC)
+end
+
+local function rawSetPivot(w, x, y)
+    VEC.X = x; VEC.Y = y
+    w:SetRenderTransformPivot(VEC)
+end
+
+local function rawSetAngle(w, a) w:SetRenderTransformAngle(a) end
+local function rawSetBrush(w, tex) w:SetBrushFromTexture(tex, false) end
+local function rawSetTint(w, c) w:SetColorAndOpacity(c) end
+local function rawSetVisibility(w, v) w:SetVisibility(v) end
+
 local function setVisible(w, on)
     if w == nil then return end
-    guard.get(function() w:SetVisibility(on and VIS_SHOW or VIS_HIDE) end)
+    pcall(rawSetVisibility, w, on and VIS_SHOW or VIS_HIDE)
 end
 
 local function addToCanvas(canvas, child)
@@ -203,12 +240,12 @@ end
 
 local function setPos(slot, x, y)
     if slot == nil then return end
-    guard.get(function() slot:SetPosition({ X = x, Y = y }) end)
+    pcall(rawSetPosition, slot, x, y)
 end
 
 local function setSize(slot, w, h)
     if slot == nil then return end
-    guard.get(function() slot:SetSize({ X = w, Y = h }) end)
+    pcall(rawSetSize, slot, w, h)
 end
 
 local function place(slot, x, y, w, h)
@@ -310,9 +347,14 @@ local BACKDROP = { R = 0.02, G = 0.03, B = 0.05, A = 0.55 }
 -- SetPosition each, and the GPU still only rasterises the pixels inside
 -- the disc.
 -- ---------------------------------------------------------------
+-- Each strip is its own Slate clipping zone, and a clipping zone change
+-- breaks batching - so every strip is one more draw call EVERY frame, not
+-- every update. 2.0.7 asked for a ~3 px outline error and got 31 strips;
+-- ~4 px costs 24 and is not tellable apart on a minimap once the game's
+-- circular art is drawn over the seam.
 local function bandCount(size)
-    local n = math.floor(size * 0.13 + 0.5)
-    if n < 24 then n = 24 elseif n > 48 then n = 48 end
+    local n = math.floor(size * 0.10 + 0.5)
+    if n < 16 then n = 16 elseif n > 36 then n = 36 end
     return n
 end
 
@@ -550,19 +592,17 @@ local function drawTerrain(cfg, mapX, mapY, imagePx, pu, pv, rotate, yaw)
             end
             if tex ~= nil and b.tex == nil then
                 b.tex = tex
-                guard.get(function() b.image:SetBrushFromTexture(tex, false) end)
+                pcall(rawSetBrush, b.image, tex)
             end
             if rotate then
                 -- every strip holds the same quad at the same offset, so
                 -- the same normalised pivot rotates them all about the
                 -- player's point on the map and they stay seamless
-                guard.get(function()
-                    b.image:SetRenderTransformPivot({ X = pu, Y = pv })
-                end)
+                pcall(rawSetPivot, b.image, pu, pv)
             end
             if b.angle ~= angle then
                 b.angle = angle
-                guard.get(function() b.image:SetRenderTransformAngle(angle) end)
+                pcall(rawSetAngle, b.image, angle)
             end
         end
         return tex
@@ -570,7 +610,7 @@ local function drawTerrain(cfg, mapX, mapY, imagePx, pu, pv, rotate, yaw)
 
     if tex ~= nil and S.mapTex == nil then
         S.mapTex = tex
-        guard.get(function() S.mapImage:SetBrushFromTexture(tex, false) end)
+        pcall(rawSetBrush, S.mapImage, tex)
     end
     setPos(S.mapSlot, mapX, mapY)
     if S.mapPx ~= imagePx then
@@ -578,13 +618,11 @@ local function drawTerrain(cfg, mapX, mapY, imagePx, pu, pv, rotate, yaw)
         setSize(S.mapSlot, imagePx, imagePx)
     end
     if rotate then
-        guard.get(function()
-            S.mapImage:SetRenderTransformPivot({ X = pu, Y = pv })
-        end)
+        pcall(rawSetPivot, S.mapImage, pu, pv)
     end
     if S.mapAngle ~= angle then
         S.mapAngle = angle
-        guard.get(function() S.mapImage:SetRenderTransformAngle(angle) end)
+        pcall(rawSetAngle, S.mapImage, angle)
     end
     return tex
 end
@@ -630,7 +668,7 @@ function M.update(cfg, player, marks, count)
         local pa = rotate and 0.0 or (player.yaw or 0.0)
         if S.playerAngle ~= pa then
             S.playerAngle = pa
-            guard.get(function() S.playerIcon:SetRenderTransformAngle(pa) end)
+            pcall(rawSetAngle, S.playerIcon, pa)
         end
     end
 
@@ -676,30 +714,37 @@ function M.update(cfg, player, marks, count)
                     entry.size = isz
                     setSize(entry.slot, isz, isz)
                 end
-                -- species portraits can fail to resolve (a pal whose icon
+                -- Species portraits can fail to resolve (a pal whose icon
                 -- asset is not cooked under the expected name); fall back
-                -- to the generic marker rather than drawing an empty box
-                local want = m.texture
-                local mtex = want and loadTexture(want, cfg.mapQuality, false) or nil
-                if mtex == nil and m.fallback then
-                    want = m.fallback
-                    mtex = loadTexture(want, cfg.mapQuality, false)
-                end
-                if mtex ~= nil and entry.tex ~= want then
-                    entry.tex = want
-                    guard.get(function() entry.image:SetBrushFromTexture(mtex, false) end)
+                -- to the generic marker rather than drawing an empty box.
+                --
+                -- Keyed on what was REQUESTED, so an icon that is already
+                -- showing the right texture costs one table compare. 2.0.8
+                -- called loadTexture for every icon every frame - a table
+                -- lookup plus an IsValid pcall per icon, ~1000 a second -
+                -- even though the answer had not changed.
+                if entry.want ~= m.texture then
+                    entry.want = m.texture
+                    local want = m.texture
+                    local mtex = want and loadTexture(want, cfg.mapQuality, false) or nil
+                    if mtex == nil and m.fallback then
+                        want = m.fallback
+                        mtex = loadTexture(want, cfg.mapQuality, false)
+                    end
+                    if mtex ~= nil and entry.tex ~= want then
+                        entry.tex = want
+                        pcall(rawSetBrush, entry.image, mtex)
+                    end
                 end
                 if m.tint ~= nil and entry.tint ~= m.tint then
                     entry.tint = m.tint
-                    guard.get(function() entry.image:SetColorAndOpacity(m.tint) end)
+                    pcall(rawSetTint, entry.image, m.tint)
                 end
                 -- 1.x's "lock all icon rotations to north": the map may
                 -- spin, the icons should not
                 if entry.angle ~= iconAngle then
                     entry.angle = iconAngle
-                    guard.get(function()
-                        entry.image:SetRenderTransformAngle(iconAngle)
-                    end)
+                    pcall(rawSetAngle, entry.image, iconAngle)
                 end
                 if not entry.inUse then
                     setVisible(entry.image, true)

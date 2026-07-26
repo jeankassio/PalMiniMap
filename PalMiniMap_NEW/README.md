@@ -135,6 +135,54 @@ axis orientation (north up) is right — the constants decoded from
 `DT_WorldMapUIData` are good, so the orientation controls are only an escape
 hatch.
 
+**Fixed in 2.0.9 — the Esc menu, and the stuttering:**
+
+**The Esc menu.** The class name was right all along: the v1 blueprint imports
+`/Game/Pal/Blueprint/UI/InGameMainMenu/WBP_InGameMainMenu` and tests exactly that
+class, which is how v1 hid itself. The bug was on our side, twice over:
+
+- `FindAllOf` also returns the **class default object**,
+  `Default__WBP_InGameMainMenu_C`. It comes back first, we cached it, and a CDO
+  is never in the viewport — so the test answered "menu closed" forever. Names
+  beginning with `Default__` are skipped now.
+- Caching **one** instance was wrong anyway: the game may build a fresh menu
+  widget each time it opens, leaving the cached one alive but permanently out of
+  the viewport. Every live instance is kept, and any one of them being in the
+  viewport counts.
+
+`IsGamePaused` stays as a second signal, but it is not the answer on its own —
+Palworld does not pause for its menus.
+
+**The stuttering.** Three separate causes, all on the game thread:
+
+- **Garbage, by the hundred-thousand.** The idiom this codebase was written in,
+  `guard.get(function() slot:SetPosition({ X = x, Y = y }) end)`, allocates **two**
+  objects per call — the closure and the vector table. One update repositions the
+  map (or 24 clipped strips), the player marker and up to 96 icons, ten times a
+  second, several setters each. Measured in isolation: 19 200 setter calls cost
+  **30 KB** of garbage the old way and **0 KB** hoisted, a ~470× difference — and
+  that is one setter out of several. Every hot-path read and write is now a
+  hoisted top-level function called as `pcall(fn, args)`, with a single shared
+  vector table refilled in place (UE4SS copies X/Y out during the call and keeps
+  no reference). End to end: **9 bytes per frame** with 96 icons and 24 strips.
+- **Eleven full UObject-array walks in a single tick.** `FindAllOf` walks the
+  whole object array, and the static scan ran one per class — eleven of them back
+  to back. It is now spread across ticks: **one class per scan tick** (three while
+  a kind has never been looked at, so the map still fills in quickly after a load),
+  with the merged marker list rebuilt every tick from cached positions using no
+  reflection at all. Sound because these things do not move. Verified: **1 walk per
+  static tick, down from 11.**
+  A class already proven to be a superclass of pals is no longer scanned at all,
+  which takes the dynamic scan from 3 walks to 2.
+- **The pal loop read a name for every pal in the level.** Most of them are
+  kilometres away and get thrown out on distance. The distance test now comes
+  first and the name is only read for the survivors.
+
+Also: the circular disc uses 24 strips instead of 31. Each strip is its own Slate
+clipping zone, and a clipping-zone change breaks batching — so every strip is one
+more draw call **every frame**, not every update. A ~4 px outline error costs 24
+and is not tellable apart from ~3 px once the game's circular art is over the seam.
+
 **Fixed in 2.0.8 — no pals on the minimap, and hiding behind the Esc menu:**
 
 - **No pal icons at all, even with "Show pals" on — a 2.0.6 regression.**

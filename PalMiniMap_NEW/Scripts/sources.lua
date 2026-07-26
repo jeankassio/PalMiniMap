@@ -97,21 +97,32 @@ local S = {
 
 -- ---------------------------------------------------------------
 -- reflection helpers
+--
+-- Every one of these is a hoisted top-level function called through
+-- pcall(fn, args) rather than pcall(function() ... end). A scan touches
+-- hundreds of actors, and the closure-per-read style these used to be
+-- written in allocated three or four garbage objects per actor per read -
+-- thousands of them every few seconds, on the game thread. That is what
+-- the collector was doing when the frame hitched.
 -- ---------------------------------------------------------------
+local function rawLocation(actor)
+    local loc = actor:K2_GetActorLocation()
+    return loc.X, loc.Y
+end
+
 local function actorLocation(actor)
     if not guard.alive(actor) then return nil end
-    local loc = guard.get(function() return actor:K2_GetActorLocation() end)
-    if loc == nil then return nil end
-    local x = guard.get(function() return loc.X end)
-    local y = guard.get(function() return loc.Y end)
-    if type(x) ~= "number" or type(y) ~= "number" then return nil end
+    local ok, x, y = pcall(rawLocation, actor)
+    if not ok or type(x) ~= "number" or type(y) ~= "number" then return nil end
     return x, y
 end
 M.actorLocation = actorLocation
 
+local function rawName(actor) return actor:GetFName():ToString() end
+
 local function actorName(actor)
-    local n = guard.get(function() return actor:GetFName():ToString() end)
-    if type(n) == "string" and n ~= "" then return n end
+    local ok, n = pcall(rawName, actor)
+    if ok and type(n) == "string" and n ~= "" then return n end
     return nil
 end
 
@@ -126,18 +137,24 @@ local function tribeOf(name)
 end
 M.tribeOf = tribeOf
 
-local function isShiny(actor)
-    local comp = guard.get(function() return actor:GetCharacterParameterComponent() end)
-    if comp == nil then return false end
-    local ind = guard.get(function() return comp.IndividualParameter end)
-    if ind == nil then return false end
-    return guard.get(function() return ind:IsRarePal() end) == true
+local function rawShiny(actor)
+    return actor:GetCharacterParameterComponent().IndividualParameter:IsRarePal()
 end
+
+local function isShiny(actor)
+    local ok, v = pcall(rawShiny, actor)
+    return ok and v == true
+end
+
+local function rawFriend(actor, other) return actor:IsFriend(other) end
 
 local function isFriend(actor, playerChar)
     if playerChar == nil then return false end
-    return guard.get(function() return actor:IsFriend(playerChar) end) == true
+    local ok, v = pcall(rawFriend, actor, playerChar)
+    return ok and v == true
 end
+
+local function rawUnwrap(v) return v:get() end
 
 -- Reflected booleans can arrive wrapped on some UE4SS builds; `== true`
 -- on the wrapper would read every collected item as still available.
@@ -145,17 +162,22 @@ local function asBool(v)
     if type(v) == "boolean" then return v end
     if type(v) == "number" then return v ~= 0 end
     if v == nil then return nil end
-    local inner = guard.get(function() return v:get() end)
+    local ok, inner = pcall(rawUnwrap, v)
+    if not ok then return nil end
     if type(inner) == "boolean" then return inner end
     if type(inner) == "number" then return inner ~= 0 end
     return nil
 end
 
+local function rawPicked(actor) return actor.bPickedInClient end
+
 -- Only meaningful for notes and effigies: those stay in the world after
 -- being taken, with the flag set. Chests and eggs just despawn, so they
 -- disappear on their own at the next scan.
 local function alreadyCollected(actor)
-    return asBool(guard.get(function() return actor.bPickedInClient end)) == true
+    local ok, v = pcall(rawPicked, actor)
+    if not ok then return false end
+    return asBool(v) == true
 end
 
 local EMPTY = {}    -- shared: callers only ever read it
@@ -267,7 +289,11 @@ function M.scanDynamic(cfg, px, py, zoom, playerPawn)
     local selfName = playerPawn ~= nil and exclude(playerPawn) or nil
     local nPlayers, nNpcs = 0, 0
 
-    if cfg.showPlayers or cfg.showPals then
+    -- A class already proven to be a superclass of pals is not scanned
+    -- again at all: FindAllOf is a full walk of the UObject array, and
+    -- doing one every four seconds for a result we have decided to throw
+    -- away is pure frame time.
+    if (cfg.showPlayers or cfg.showPals) and not rejectedClass["PalPlayerCharacter"] then
         local all = findAll("PalPlayerCharacter", "players")
         if usableForExclusion("PalPlayerCharacter", #all, palCount) then
             nPlayers = #all
@@ -281,7 +307,7 @@ function M.scanDynamic(cfg, px, py, zoom, playerPawn)
         end
     end
 
-    if cfg.showNPCs or cfg.showPals then
+    if (cfg.showNPCs or cfg.showPals) and not rejectedClass["PalNPC"] then
         local all = findAll("PalNPC", "NPC humans")
         if usableForExclusion("PalNPC", #all, palCount) then
             nNpcs = #all
@@ -303,12 +329,15 @@ function M.scanDynamic(cfg, px, py, zoom, playerPawn)
         local near, n = nearScratch, 0
         for i = 1, #all do
             local a = all[i]
-            local name = actorName(a)
-            if name ~= nil and not (excluded and excluded[name]) then
-                local x, y = actorLocation(a)
-                if x ~= nil then
-                    local d = dist2(x, y, px, py)
-                    if d <= maxD2 then
+            -- Distance FIRST. The name is only needed to test the exclusion
+            -- set, and reading it for every pal in the level - most of them
+            -- kilometres away - doubled the reflection cost of the scan.
+            local x, y = actorLocation(a)
+            if x ~= nil then
+                local d = dist2(x, y, px, py)
+                if d <= maxD2 then
+                    local name = actorName(a)
+                    if name ~= nil and not (excluded and excluded[name]) then
                         n = n + 1
                         local slot = near[n]
                         if slot == nil then slot = {}; near[n] = slot end
@@ -349,39 +378,79 @@ end
 
 -- ---------------------------------------------------------------
 -- static scan: everything that does not move
+--
+-- SPREAD ACROSS TICKS. Every FindAllOf is a full walk of the UObject
+-- array, and running eleven of them back to back on the game thread is a
+-- frame spike you can feel - it was a large part of the 2.0.8 stuttering.
+-- Only ONE class is scanned per call once things have settled (three
+-- while a kind has never been looked at, so the map fills in quickly
+-- after a load), and the merged list is rebuilt from per-kind caches.
+--
+-- This is only sound because these things do not move: a cache scanned
+-- thirty seconds ago is still exactly right, apart from items that have
+-- been picked up since - and those go away on that kind's next turn.
 -- ---------------------------------------------------------------
+local kindCache = {}      -- kind -> { x, y, ... }  positions only
+local kindSeen = {}       -- kind -> true once scanned at least once
+local rotation = 1
+
+local function wantedKind(cfg, spec)
+    if cfg[spec.cfg] == true then return true end
+    if spec.kind == "camp" and cfg.autohideInBase then return true end
+    return false
+end
+
+local function scanOneKind(cfg, spec)
+    local list = kindCache[spec.kind]
+    if list == nil then list = {}; kindCache[spec.kind] = list end
+
+    local all = findAll(spec.class, spec.kind)
+    local count = 0
+    for i = 1, #all do
+        local a = all[i]
+        local x, y = actorLocation(a)
+        if x ~= nil then
+            local skip = cfg.hideCollected and spec.collectible
+                         and alreadyCollected(a)
+            if not skip then
+                count = count + 1
+                local p = list[count]          -- reused, not reallocated
+                if p == nil then p = {}; list[count] = p end
+                p.x, p.y = x, y
+            end
+        end
+    end
+    for i = #list, count + 1, -1 do list[i] = nil end
+    kindSeen[spec.kind] = true
+end
+
 local staticScratch = {}
 
-function M.scanStatic(cfg, px, py, zoom)
+-- Rebuild the merged, distance-sorted, capped draw list from the caches.
+-- Pure arithmetic over a few hundred entries: no reflection at all.
+local function rebuildStatic(cfg, px, py, zoom)
     local maxD2 = keepRadius2(zoom, M.STATIC_PAD)
-    local wantCamps = cfg.showBaseCamps or cfg.autohideInBase
-
     local found, n = staticScratch, 0
-    S.camps = {}
+    local camps = S.camps
+    for i = #camps, 1, -1 do camps[i] = nil end
 
     for _, spec in ipairs(STATIC_KINDS) do
-        local wanted = cfg[spec.cfg] == true
-        if wanted or (spec.kind == "camp" and wantCamps) then
-            local all = findAll(spec.class, spec.kind)
-            for i = 1, #all do
-                local a = all[i]
-                local x, y = actorLocation(a)
-                if x ~= nil then
-                    if spec.kind == "camp" and wantCamps then
-                        S.camps[#S.camps + 1] = { x = x, y = y }
-                    end
-                    if wanted then
-                        local d = dist2(x, y, px, py)
-                        if d <= maxD2 then
-                            local skip = cfg.hideCollected and spec.collectible
-                                         and alreadyCollected(a)
-                            if not skip then
-                                n = n + 1
-                                local slot = found[n]
-                                if slot == nil then slot = {}; found[n] = slot end
-                                slot.x, slot.y, slot.kind, slot.d = x, y, spec.kind, d
-                            end
-                        end
+        local list = kindCache[spec.kind]
+        if list ~= nil then
+            local visible = cfg[spec.cfg] == true
+            local isCamp = spec.kind == "camp"
+            for i = 1, #list do
+                local p = list[i]
+                if isCamp and cfg.autohideInBase then
+                    camps[#camps + 1] = p
+                end
+                if visible then
+                    local d = dist2(p.x, p.y, px, py)
+                    if d <= maxD2 then
+                        n = n + 1
+                        local slot = found[n]
+                        if slot == nil then slot = {}; found[n] = slot end
+                        slot.x, slot.y, slot.kind, slot.d = p.x, p.y, spec.kind, d
                     end
                 end
             end
@@ -397,11 +466,39 @@ function M.scanStatic(cfg, px, py, zoom)
     table.sort(found, byDistance)
 
     local limit = math.min(n, cfg.maxPoiIcons)
-    local out = {}
+    local out = S.static
     for i = 1, limit do
-        out[i] = { x = found[i].x, y = found[i].y, kind = found[i].kind }
+        local slot = found[i]
+        local o = out[i]
+        if o == nil then o = {}; out[i] = o end
+        o.x, o.y, o.kind = slot.x, slot.y, slot.kind
     end
-    S.static = out
+    for i = #out, limit + 1, -1 do out[i] = nil end
+end
+
+function M.scanStatic(cfg, px, py, zoom)
+    -- three at a time while the map is still filling in after a load,
+    -- one at a time from then on
+    local budget = 1
+    for _, spec in ipairs(STATIC_KINDS) do
+        if wantedKind(cfg, spec) and not kindSeen[spec.kind] then budget = 3; break end
+    end
+
+    local checked = 0
+    while budget > 0 and checked < #STATIC_KINDS do
+        local spec = STATIC_KINDS[rotation]
+        rotation = (rotation % #STATIC_KINDS) + 1
+        checked = checked + 1
+        if wantedKind(cfg, spec) then
+            scanOneKind(cfg, spec)
+            budget = budget - 1
+        elseif kindCache[spec.kind] ~= nil then
+            kindCache[spec.kind] = nil     -- turned off: drop its markers
+            kindSeen[spec.kind] = nil
+        end
+    end
+
+    rebuildStatic(cfg, px, py, zoom)
 end
 
 -- Base camp proximity is recomputed from the stored camp positions on
@@ -496,6 +593,8 @@ function M.forget()
     S.static, S.camps = {}, {}
     S.campNear = false
     S.lastScan = 0.0
+    -- the per-kind caches hold world positions from the OLD level
+    kindCache, kindSeen, rotation = {}, {}, 1
     -- drop the actor references the pools would otherwise keep alive
     for i = 1, #nearScratch do nearScratch[i].actor = nil end
 end

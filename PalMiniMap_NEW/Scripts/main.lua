@@ -1,5 +1,5 @@
 -- =====================================================================
--- PalMiniMap 2.0.6 - a native minimap for Palworld
+-- PalMiniMap 2.0.9 - a native minimap for Palworld
 --
 -- No blueprint, no .pak, no shipped assets. The whole mod is this Lua
 -- script driving UMG through UE4SS reflection, drawing the game's own
@@ -129,11 +129,30 @@ local function statics()
     return gameplayStatics
 end
 
+-- Hoisted reflection thunks. See the note in guard.get: passing arguments
+-- instead of closing over them is what keeps the 10 Hz path from
+-- allocating a fistful of garbage every frame.
+local function rawIsLocal(pc) return pc:IsLocalPlayerController() end
+local function rawPawnProp(pc) return pc.Pawn end
+local function rawGetPawn(pc) return pc:K2_GetPawn() end
+local function rawStaticsPawn(gs, pc) return gs:GetPlayerPawn(pc, 0) end
+local function rawControlRotation(pc) return pc:GetControlRotation().Yaw end
+local function rawActorYaw(pawn) return pawn:K2_GetActorRotation().Yaw end
+local function rawVelocity(pawn)
+    local v = pawn:GetVelocity()
+    return v.X, v.Y, v.Z
+end
+local function rawIsPaused(gs, pc) return gs:IsGamePaused(pc) end
+local function rawInViewport(w) return w:IsInViewport() end
+local function rawWorldName(pc) return pc:GetWorld():GetFName():ToString() end
+local function rawClassName(o) return o:GetClass():GetFName():ToString() end
+local function rawObjectName(o) return o:GetFName():ToString() end
+
 -- The LOCAL controller specifically. On a co-op host the object array
 -- holds a PlayerController per connected player, and taking whichever
 -- came first would centre the minimap on somebody else's character.
 local function isLocal(pc)
-    return guard.get(function() return pc:IsLocalPlayerController() end) == true
+    return guard.get(rawIsLocal, pc) == true
 end
 
 local function findController()
@@ -172,13 +191,13 @@ end
 local function playerPawn()
     local pc = playerController()
     if pc == nil then return nil end
-    local pawn = guard.get(function() return pc.Pawn end)
+    local pawn = guard.get(rawPawnProp, pc)
     if guard.alive(pawn) then return pawn end
-    pawn = guard.get(function() return pc:K2_GetPawn() end)
+    pawn = guard.get(rawGetPawn, pc)
     if guard.alive(pawn) then return pawn end
     local gs = statics()
     if gs ~= nil then
-        pawn = guard.get(function() return gs:GetPlayerPawn(pc, 0) end)
+        pawn = guard.get(rawStaticsPawn, gs, pc)
         if guard.alive(pawn) then return pawn end
     end
     return nil
@@ -187,6 +206,8 @@ end
 -- x, y, yaw, speed of the local player, or nil while the world is not
 -- playable. Computed at most once per pump tick and shared by every
 -- sub-tick that needs it.
+local frameStateBuf = { x = 0, y = 0, yaw = 0, speed = 0, pawn = nil }
+
 local function readPlayerState()
     local pawn = playerPawn()
     if pawn == nil then return nil end
@@ -194,26 +215,22 @@ local function readPlayerState()
     if x == nil then return nil end
     local yaw = 0.0
     local pc = playerController()
-    local rot = pc and guard.get(function() return pc:GetControlRotation() end) or nil
-    if rot == nil then
-        rot = guard.get(function() return pawn:K2_GetActorRotation() end)
-    end
-    if rot ~= nil then
-        local y2 = guard.get(function() return rot.Yaw end)
-        if type(y2) == "number" then yaw = y2 end
-    end
-    -- speed drives autozoom; velocity is centimetres per second
+    local y2 = pc and guard.get(rawControlRotation, pc) or nil
+    if type(y2) ~= "number" then y2 = guard.get(rawActorYaw, pawn) end
+    if type(y2) == "number" then yaw = y2 end
+    -- speed drives autozoom; velocity is centimetres per second.
+    -- pcall directly, not guard.get: guard.get returns only the FIRST
+    -- result and this needs three.
     local speed = 0.0
-    local vel = guard.get(function() return pawn:GetVelocity() end)
-    if vel ~= nil then
-        local vx = guard.get(function() return vel.X end)
-        local vy = guard.get(function() return vel.Y end)
-        local vz = guard.get(function() return vel.Z end)
-        if type(vx) == "number" and type(vy) == "number" then
-            speed = math.sqrt(vx * vx + vy * vy + (type(vz) == "number" and vz * vz or 0))
-        end
+    local ok, vx, vy, vz = pcall(rawVelocity, pawn)
+    if ok and type(vx) == "number" and type(vy) == "number" then
+        speed = math.sqrt(vx * vx + vy * vy + (type(vz) == "number" and vz * vz or 0))
     end
-    return { x = x, y = y, yaw = yaw, speed = speed, pawn = pawn }
+    -- reused: this table is rebuilt ten times a second and never escapes
+    -- the tick that made it
+    local st = frameStateBuf
+    st.x, st.y, st.yaw, st.speed, st.pawn = x, y, yaw, speed, pawn
+    return st
 end
 
 local frameState = nil   -- player state for the current pump tick
@@ -264,9 +281,7 @@ local NON_GAME_WORLDS = { PL_PPSplash = true, PL_Login = true, PL_Title = true }
 local function currentWorldName()
     local pc = playerController()
     if pc == nil then return nil end
-    local w = guard.get(function() return pc:GetWorld() end)
-    if not guard.alive(w) then return nil end
-    local n = guard.get(function() return w:GetFName():ToString() end)
+    local n = guard.get(rawWorldName, pc)
     if n == nil then return nil end
     return tostring(n)
 end
@@ -339,17 +354,40 @@ end
 -- has never been found - a menu widget that only exists while the menu is
 -- open would be missed entirely by a long back-off - and the search stops
 -- once found or after a couple of minutes of never finding it.
+-- WHY IT NEVER FIRED. The class name was right all along - the v1
+-- blueprint imports /Game/Pal/Blueprint/UI/InGameMainMenu/WBP_InGameMainMenu
+-- and tests exactly this class. The bug was on our side, twice over:
+--
+--   1. FindAllOf also returns the CLASS DEFAULT OBJECT,
+--      Default__WBP_InGameMainMenu_C. That is the first thing it hands
+--      back, we cached it, and a CDO is never in the viewport - so the
+--      test answered "menu closed" forever. Names beginning with
+--      "Default__" are skipped now.
+--   2. Caching ONE instance is wrong anyway: the game may build a fresh
+--      menu widget each time it is opened, and the cached one then stays
+--      alive but permanently out of the viewport. All live instances are
+--      kept and any one of them being in the viewport counts.
+--
+-- The instance list is re-collected only when every entry has died, so
+-- the steady-state cost is one IsInViewport call per instance.
 local GAME_MENU_CLASS = "WBP_InGameMainMenu_C"
 local GAME_MENU_TRIES = 60
 local GAME_MENU_SLOW  = 30.0
-local gameMenuWidget = nil
+local gameMenuWidgets = {}
 local gameMenuTries = 0
 local gameMenuRetryAt = 0.0
 
+local function anyMenuWidgetAlive()
+    for i = 1, #gameMenuWidgets do
+        if guard.alive(gameMenuWidgets[i]) then return true end
+    end
+    return false
+end
+
 local function refreshGameMenuWidget()
     if not cfg.hideBehindGameUi then return end
-    if guard.alive(gameMenuWidget) then return end
-    gameMenuWidget = nil
+    if anyMenuWidgetAlive() then return end
+    for i = #gameMenuWidgets, 1, -1 do gameMenuWidgets[i] = nil end
     if gameMenuTries >= GAME_MENU_TRIES then
         local now = os.clock()
         if now < gameMenuRetryAt then return end
@@ -359,11 +397,19 @@ local function refreshGameMenuWidget()
     local found = guard.get(FindAllOf, GAME_MENU_CLASS)
     if type(found) ~= "table" then return end
     for i = 1, #found do
-        if guard.alive(found[i]) then
-            gameMenuWidget = found[i]
-            guard.log("found the game's menu widget (" .. GAME_MENU_CLASS .. ")")
-            return
+        local w = found[i]
+        if guard.alive(w) then
+            local n = guard.get(rawObjectName, w)
+            n = n and tostring(n) or ""
+            -- the class default object is not a real widget
+            if n:sub(1, 9) ~= "Default__" then
+                gameMenuWidgets[#gameMenuWidgets + 1] = w
+            end
         end
+    end
+    if #gameMenuWidgets > 0 then
+        guard.log(string.format("found %d instance(s) of %s to watch for the game menu",
+                                #gameMenuWidgets, GAME_MENU_CLASS))
     end
 end
 
@@ -371,15 +417,20 @@ local function gamePaused()
     local gs = statics()
     local pc = playerController()
     if gs == nil or pc == nil then return false end
-    return guard.get(function() return gs:IsGamePaused(pc) end) == true
+    return guard.get(rawIsPaused, gs, pc) == true
 end
 
 local function gameUiOpen()
     if not cfg.hideBehindGameUi then return false end
     if menu.isOpen() then return false end   -- our own window may stay up
     if gamePaused() then return true end
-    if not guard.alive(gameMenuWidget) then return false end
-    return guard.get(function() return gameMenuWidget:IsInViewport() end) == true
+    for i = 1, #gameMenuWidgets do
+        local w = gameMenuWidgets[i]
+        if guard.alive(w) and guard.get(rawInViewport, w) == true then
+            return true
+        end
+    end
+    return false
 end
 
 -- Diagnostic for exactly the problem above: with this on, every
@@ -394,9 +445,8 @@ local function logViewportWidgets()
     local names, seen = {}, {}
     for i = 1, #found do
         local w = found[i]
-        if guard.alive(w)
-           and guard.get(function() return w:IsInViewport() end) == true then
-            local c = guard.get(function() return w:GetClass():GetFName():ToString() end)
+        if guard.alive(w) and guard.get(rawInViewport, w) == true then
+            local c = guard.get(rawClassName, w)
             c = c and tostring(c) or nil
             if c ~= nil and not seen[c] then
                 seen[c] = true
@@ -454,16 +504,12 @@ local function movementTick()
     render.update(cfg, p, marks, count)
 end
 
--- Static points of interest do not move, so they are rescanned far less
--- often than pals are: each rescan is a FindAllOf per class - a full walk
--- of the UObject array, eleven of them - and doing that every 4 s was the
--- single most expensive thing the mod did. Now it happens on a slow timer
--- or when the player has actually travelled somewhere new.
-local STATIC_MIN_INTERVAL = 15000            -- ms
-local STATIC_MOVE_TRIGGER = sources.STATIC_PAD or 15000   -- world units
-local lastStaticAt = 0.0
-local staticX, staticY = nil, nil
-
+-- sources.scanStatic() only walks ONE object class per call now (see the
+-- note there), so it is called every scan tick rather than being held back
+-- for a slow timer: that is what turns one eleven-walk spike into eleven
+-- ordinary ticks. The merged marker list is rebuilt from cached positions
+-- on every call, with no reflection, so the markers still track the player
+-- exactly.
 local function scanTick()
     if not settled() then return end
     local p = frameState
@@ -472,20 +518,7 @@ local function scanTick()
 
     -- the player character doubles as the reference for IsFriend
     sources.scanDynamic(cfg, p.x, p.y, zoom, p.pawn)
-
-    local now = os.clock() * 1000.0
-    local moved = true
-    if staticX ~= nil then
-        local dx, dy = p.x - staticX, p.y - staticY
-        moved = (dx * dx + dy * dy) > (STATIC_MOVE_TRIGGER * STATIC_MOVE_TRIGGER)
-    end
-    local due = (now - lastStaticAt) >= math.max(STATIC_MIN_INTERVAL,
-                                                 cfg.scanIntervalMs or 4000)
-    if moved or due then
-        lastStaticAt = now
-        staticX, staticY = p.x, p.y
-        sources.scanStatic(cfg, p.x, p.y, zoom)
-    end
+    sources.scanStatic(cfg, p.x, p.y, zoom)
     sources.updateProximity(cfg, p.x, p.y)
 end
 
@@ -496,7 +529,6 @@ local function maintenanceTick()
         sources.forget()
         cachedPC = nil
         gameMenuWidget = nil
-        staticX, staticY = nil, nil
         worldName = ""
         return
     end
@@ -508,7 +540,6 @@ local function maintenanceTick()
         worldmap.recalibrate()
         gameMenuWidget = nil
         gameMenuRetryAt = 0.0
-        staticX, staticY = nil, nil
         lastX, lastY = nil, nil
         beQuiet(nil)
     end
@@ -686,8 +717,7 @@ menu.onCommit = function(keys)
         end
     end
     if rescan then
-        sources.forget()
-        staticX, staticY = nil, nil
+        sources.forget()   -- the per-kind caches rebuild on the next tick
     end
     if rebuild then
         rebuildNow()
@@ -819,7 +849,10 @@ local function pump()
         guard.try("movementTick", movementTick)
     end
 
+    -- the state buffer is reused, so the pawn reference in it has to be
+    -- dropped explicitly or it would outlive the tick that read it
     frameState = nil
+    frameStateBuf.pawn = nil
     flushSave()
 end
 
@@ -832,7 +865,6 @@ guard.register("world transition hook", function()
         sources.forget()
         cachedPC = nil
         gameMenuWidget = nil
-        staticX, staticY = nil, nil
         worldName = ""
         beQuiet(nil)
     end))
@@ -871,4 +903,4 @@ guard.register("pump loop", function()
     LoopAsync(PUMP_MS, guard.loopBody("pump", pump, anythingDue))
 end)
 
-guard.log("PalMiniMap 2.0.8 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
+guard.log("PalMiniMap 2.0.9 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
