@@ -143,6 +143,39 @@ hatch is `calibrate()`, which reads the live bounds out of the game's own
 iterates the defaults, so the retired `axis` block is ignored on load and gone
 from the file after the next save.
 
+**Fixed in 2.1.9 — the crash on closing the F5 window, and what the same log settled about
+the native scan.**
+
+`UE4SS.log` ended one line after `menu closed`, and the dump said
+
+```
+EXCEPTION_ACCESS_VIOLATION reading address 0xffffffffffffffff
+```
+
+which is what an `INDEX_NONE` / `-1` index looks like used as an address. Opening the menu
+calls `SetInputMode_UIOnlyEx(pc, widget)`, which gives Slate a **focus path into that
+widget**. Closing it removed the widget from the viewport *first* and handed input back to
+the game afterwards — so in between, Slate held a focus path to a widget that had just been
+unparented and was on its way to being collected. Walking that path is a native dereference
+no `pcall` can see.
+
+The order is now: hand focus back to the **game** while the widget is still alive and still
+parented → make the widget non-focusable and collapsed → only then remove it from the
+viewport. The same order is used on the build-failure path, and a world change while the
+menu is open now releases the input mode too (otherwise the next world starts in UI-only
+with a cursor and no window to justify it). A new harness, `menutest.py`, records the
+teardown call sequence and asserts the release happens **before** the removal — the kind of
+ordering bug that is invisible in a diff.
+
+**And the same log settled the native-scan question.** `PalObjectCollector`'s array
+elements arrive **wrapped on this UE4SS build too** — so the property-vs-out-param
+distinction 2.1.8 was built on does not hold here; this build wraps object array elements in
+general. 2.1.7's rule caught it and refused the route instead of crashing, which is exactly
+what it is for. The practical conclusion for this build: **`FindAllOf` is the only source of
+durable actor handles**, so the engine object array is doing the character scan. Both native
+list routes stay in the code and take over automatically if a future UE4SS or game build
+hands back first-class objects — the log says which route is live.
+
 **Added in 2.1.8 — `PalObjectCollector`, the native route that actually works.**
 
 Found by parsing `Palworld.usmap` (the schema dump in `_tools`) rather than by guessing.

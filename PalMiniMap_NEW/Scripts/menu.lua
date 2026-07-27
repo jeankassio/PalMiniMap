@@ -225,6 +225,9 @@ local function rawGameAndUI(wbl, pc, widget)
 end
 local function rawGameOnly(wbl, pc) wbl:SetInputMode_GameOnly(pc) end
 local function rawShowCursor(pc, on) pc.bShowMouseCursor = on end
+local function rawSetFocusable(w, on) w.bIsFocusable = on end
+local function rawSetVisibility(w, v) w:SetVisibility(v) end
+local function rawRemoveFromParent(w) w:RemoveFromParent() end
 
 local function applyInputMode(pc, widget)
     if pc == nil or not guard.alive(pc) then return end
@@ -431,13 +434,38 @@ function M.usable()
     return S.open and S.widget ~= nil and guard.alive(S.widget)
 end
 
+-- ---------------------------------------------------------------
+-- Closing the window. THE ORDER OF THESE THREE STEPS IS THE WHOLE
+-- FUNCTION, and getting it wrong crashed the game.
+--
+-- Opening the menu calls SetInputMode_UIOnlyEx(pc, widget), which gives
+-- Slate a FOCUS PATH INTO THIS WIDGET. 2.1.8 then closed it by removing
+-- the widget from the viewport FIRST and handing input back to the game
+-- afterwards - so between those two calls Slate was holding a focus path
+-- to a widget that had just been unparented and was on its way to being
+-- collected. Walking that path is a native dereference no Lua guard can
+-- see, and the game died with
+--     EXCEPTION_ACCESS_VIOLATION reading address 0xffffffffffffffff
+-- immediately after "menu closed" was written to the log. (0xffff...ff is
+-- what an INDEX_NONE / -1 index looks like when it is used as an address.)
+--
+-- The order below is the safe one: give focus back to the GAME while the
+-- widget is still alive and still parented, then make the widget stop
+-- being a focus target at all, and only then take it out of the viewport.
+-- ---------------------------------------------------------------
 function M.close()
     if not S.open then return end
     if M.onCommit then guard.try("menu flush", M.flush) end
-    if S.widget ~= nil and guard.alive(S.widget) then
-        guard.get(function() S.widget:RemoveFromParent() end)
-    end
+
     releaseInputMode(controller())
+
+    local w = S.widget
+    if w ~= nil and guard.alive(w) then
+        guard.get(rawSetFocusable, w, false)
+        guard.get(rawSetVisibility, w, VIS_HIDE)
+        guard.get(rawRemoveFromParent, w)
+    end
+
     drop()
     guard.log("menu closed")
 end
@@ -461,8 +489,14 @@ function M.open(cfg, worldName)
         applyInputMode(pc, S.widget)
     end)
     if not ok then
-        if S.widget ~= nil and guard.alive(S.widget) then
-            guard.get(function() S.widget:RemoveFromParent() end)
+        -- Same order as M.close(): applyInputMode may already have run and
+        -- pointed Slate's focus at this widget before whatever failed.
+        releaseInputMode(pc)
+        local w = S.widget
+        if w ~= nil and guard.alive(w) then
+            guard.get(rawSetFocusable, w, false)
+            guard.get(rawSetVisibility, w, VIS_HIDE)
+            guard.get(rawRemoveFromParent, w)
         end
         drop()
         return
@@ -476,12 +510,22 @@ end
 function M.toggle(cfg, worldName)
     if (os.clock() - S.lastToggle) < 0.3 then return end
     S.lastToggle = os.clock()
-    if S.open and not M.usable() then drop() end
+    if S.open and not M.usable() then
+        -- the widget went away underneath us; the input mode did not
+        releaseInputMode(controller())
+        drop()
+    end
     if S.open then M.close() else M.open(cfg, worldName) end
 end
 
 function M.worldChanged(worldName)
-    if S.open and S.world ~= "" and S.world ~= worldName then drop() end
+    if S.open and S.world ~= "" and S.world ~= worldName then
+        -- the widget died with its world, but the input mode is set on the
+        -- PLAYER CONTROLLER: without this the new world starts in UI-only
+        -- with a cursor on and no window to justify it
+        releaseInputMode(controller())
+        drop()
+    end
 end
 
 -- ---------------------------------------------------------------
