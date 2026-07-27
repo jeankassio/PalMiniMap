@@ -25,11 +25,17 @@ local DEFAULTS = {
 
     -- Terrain sharpness. The map is the game's own texture magnified, so
     -- the only thing that decides how sharp it looks is which mip level
-    -- the streamer keeps resident - see tuneTexture() in render.lua.
+    -- the streamer keeps resident - see tune() in assets.lua.
     --   0 leave the streamer alone (lowest VRAM, softest terrain)
     --   1 keep the world map texture fully resident
-    --   2 ...and the icon textures too
+    --   2 same as 1 today (see below)
     --   3 ...plus trilinear filtering and no streaming mip bias
+    --
+    -- 2 used to force every ICON's full mip chain resident as well. That
+    -- was a mistake: icons are drawn at eighteen pixels, so those mips are
+    -- pulled off disk only to be scaled away, and the streaming burst that
+    -- followed each newly discovered pal species was part of the stutter
+    -- 2.1.1 fixes. The level is kept so existing settings files still load.
     mapQuality         = 2,
     -- Escape hatch: point this at a different map asset if a game update
     -- ever ships a more detailed one. Empty = the stock T_WorldMap.
@@ -94,9 +100,6 @@ local DEFAULTS = {
 
     maxPalIcons        = 48,
     maxPoiIcons        = 48,
-
-    -- see worldmap.lua: image orientation relative to world axes
-    axis               = { swapXY = true, flipH = false, flipV = true },
 }
 
 local current = nil
@@ -125,6 +128,11 @@ end
 -- Merge stored values over the defaults, one level deep, keeping the
 -- default whenever the stored value has the wrong type. A hand-edited file
 -- with a typo degrades to defaults instead of breaking the mod.
+--
+-- Iterating the DEFAULTS is also what retires a setting cleanly: a key the
+-- stored file has and the defaults do not is simply not carried over, so
+-- the removed `axis` block in an older settings file is ignored on load and
+-- gone from the file after the next save. Nothing has to migrate it.
 local function merge(stored)
     local out = {}
     for k, v in pairs(DEFAULTS) do

@@ -130,10 +130,74 @@ race like the 1.x `Paldar.modconfig.json` had. Writes are atomic anyway.
 ## Status
 
 **Confirmed in game (2.0.0/2.0.1 runs):** the terrain renders, the world→map
-transform is correct, the player marker sits where it should, and the default
-axis orientation (north up) is right — the constants decoded from
-`DT_WorldMapUIData` are good, so the orientation controls are only an escape
-hatch.
+transform is correct, the player marker sits where it should, and the axis
+orientation (north up) is right — the constants decoded from `DT_WorldMapUIData`
+are good. Since that is settled, **2.1.1 removes the `axis.*` orientation
+settings**: any of the eight combinations other than the confirmed one mirrors or
+rotates the entire coordinate transform, so terrain, player marker and every icon
+disagree with the world at once and the minimap simply looks broken. A setting
+whose only non-default values are bugs is not a setting, so the orientation is a
+constant now (`worldmap.toUV`). If a game update ever moves the world, the escape
+hatch is `calibrate()`, which reads the live bounds out of the game's own
+`WBP_Map_Body_C` widget. An older settings file keeps working — `config.merge`
+iterates the defaults, so the retired `axis` block is ignored on load and gone
+from the file after the next save.
+
+**Fixed in 2.1.1 — the stutter as each arrow turned into a pal portrait:**
+
+The report was, again, exactly the detail that made it findable: the map comes up
+fine, the pals start as generic arrows, **and the game hitches at the moment an
+arrow is replaced by that pal's own icon** — so in an area with many pals, where
+new species keep walking into range, it hitches continuously.
+
+That points at one call. `LoadAsset` is **synchronous**: it stalls the game thread
+while the package is found, read and turned into UObjects, and UE4SS exposes no
+asynchronous alternative. The only lever the mod has is *how often it pulls that
+one*, and 2.1.0 pulled it far too often, from three places that did not know about
+each other:
+
+* `sources.lua` probed every new species with its own `StaticFindObject` +
+  `LoadAsset`, up to six per scan, **on the scan tick**;
+* `render.lua` then loaded the very same path **again** through a separate queue,
+  two per movement tick — twenty a second;
+* and when an icon had no texture yet, `render.lua` called `LoadAsset` for the
+  fallback marker **from inside the per-icon draw loop** — up to 96 icons, ten
+  times a second.
+
+So every pal species cost two synchronous package loads, the second one pointless,
+and the draw loop itself could load. That is the hitch, and it is proportional to
+how many species are nearby, which is what the player described.
+
+All of it now lives in one new file, `assets.lua`, under four rules:
+
+1. **Nothing on a draw or scan path may block.** `assets.get` and `assets.probe`
+   are table lookups; a miss only enqueues the path and returns nil. The icon
+   keeps drawing its arrow until the portrait is genuinely in memory, and the
+   swap then costs one `SetBrushFromTexture`.
+2. **Two stages, because the two operations differ by orders of magnitude.**
+   `StaticFindObject` is a hash lookup and touches no disk, so any texture the
+   game already has resident is adopted for free, several per pump. Only what is
+   genuinely absent reaches the load queue. In the test world this alone takes
+   the common case to *zero* loads.
+3. **At most one `LoadAsset` per pump, and the mod pays for it.** The call is
+   timed and the next one is held off for 40× what the last cost — a 5 ms load
+   buys 200 ms of silence. This caps the mod at ~2.5% of wall time inside
+   `LoadAsset` on any machine: a slow disk gets a slower fill rate instead of a
+   visible stutter, with nothing to tune per system.
+4. **Failures back off and then give up** for the session, and are forgiven again
+   on a world change, since an asset that cannot be found during a load screen is
+   not missing — it was simply not mounted yet.
+
+The pump runs once per movement tick, *after* the draw, so whatever it spends is
+spent when the frame's real work is already done.
+
+One related mistake is corrected with it. Quality level 2 used to force every
+**icon's** full mip chain resident. Icons are drawn at eighteen pixels, so those
+mips were pulled off disk only to be scaled away — and the streaming burst that
+followed each newly discovered species was part of the same stutter. Forcing mips
+resident is right for the terrain, which is one texture magnified several times
+across the window; it is wrong for 137 portraits. Icons are left to the streamer
+now, and the setting is kept so existing settings files still load.
 
 **Fixed in 2.1.0 — the freeze while using the settings window, and the pals
 that showed as arrows:**

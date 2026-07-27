@@ -19,13 +19,21 @@
 -- so nothing has to be shipped and the art always matches the installed
 -- game version.
 --
--- STILL TO CONFIRM IN GAME: which world axis runs which way on that
--- texture. UE's +X/+Y vs. the image's right/down is a convention, not
--- something the data table states. Every combination is expressible
--- through the `axis` settings below, so fixing it is a config change and
--- never a code change. calibrate() also tries to read the values straight
--- out of the game's own map widget when it happens to be loaded, which
--- keeps this correct across game updates.
+-- WHICH WORLD AXIS RUNS WHICH WAY on that texture is a convention, not
+-- something the data table states, so 2.0.x carried it as three settings
+-- (`axis.swapXY`, `axis.flipH`, `axis.flipV`) in case the shipped guess was
+-- wrong. It was not: the orientation below was confirmed in game in the
+-- 2.0.0/2.0.1 runs - north is up and markers land where they should.
+--
+-- 2.1.1 removes the settings. They were the only knobs in the mod that
+-- could not be set WRONG-but-harmlessly: any of the eight combinations
+-- other than this one silently mirrors or rotates the whole coordinate
+-- transform, so the terrain, the player marker and every icon disagree
+-- with the world and the minimap looks broken rather than misconfigured.
+-- A setting whose only non-default values are bugs is not a setting.
+-- The orientation is now a constant, and the escape hatch if a game update
+-- ever moves the world is calibrate() below, which reads the bounds
+-- straight out of the game's own map widget.
 -- =====================================================================
 
 local guard = require("guard")
@@ -46,23 +54,6 @@ local REGIONS = {
         texture = "/Game/Pal/Texture/UI/Map/T_WorldMap",
     },
 }
-
--- Axis convention, overridable from the settings file.
---   swapXY  : the image's horizontal axis follows world Y instead of world X
---   flipH   : mirror the horizontal axis
---   flipV   : mirror the vertical axis
-local axis = { swapXY = true, flipH = false, flipV = true }
-
-function M.setAxis(cfg)
-    if type(cfg) ~= "table" then return end
-    if type(cfg.swapXY) == "boolean" then axis.swapXY = cfg.swapXY end
-    if type(cfg.flipH)  == "boolean" then axis.flipH  = cfg.flipH  end
-    if type(cfg.flipV)  == "boolean" then axis.flipV  = cfg.flipV  end
-end
-
-function M.getAxis()
-    return { swapXY = axis.swapXY, flipH = axis.flipH, flipV = axis.flipV }
-end
 
 -- Region whose bounds contain the point; falls back to the main island so
 -- the minimap degrades to "slightly wrong" instead of "blank".
@@ -88,10 +79,10 @@ function M.toUV(x, y, region)
 
     local u = (x - region.minX) / spanX
     local v = (y - region.minY) / spanY
-    if axis.swapXY then u, v = v, u end
-    if axis.flipH then u = 1.0 - u end
-    if axis.flipV then v = 1.0 - v end
-    return u, v
+    -- The confirmed orientation, was `axis = { swapXY = true, flipH = false,
+    -- flipV = true }`: the image's horizontal axis follows world Y, and its
+    -- vertical axis runs opposite to world X.
+    return v, 1.0 - u
 end
 
 -- How many normalised units one world unit is worth, for the current

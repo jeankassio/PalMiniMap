@@ -10,9 +10,13 @@
 -- Options that existed in 1.x but describe machinery version 2 no longer
 -- has are gone rather than faked: "minimap render resolution" and
 -- "capture LOD bias" configured the scene capture, and there is no scene
--- capture any more. Everything else carried over, and the axis controls
--- at the bottom are new - they are the escape hatch if the map texture
--- orientation ever needs correcting without editing code.
+-- capture any more.
+--
+-- NOTHING IN THIS WINDOW MAY BE ABLE TO BREAK THE MINIMAP. That is what
+-- retired the map-orientation controls in 2.1.1: every value other than
+-- the confirmed one mirrored or rotated the whole coordinate transform, so
+-- terrain, player marker and icons all disagreed with the world at once -
+-- a setting whose only non-default values are bugs. See worldmap.lua.
 -- =====================================================================
 
 local guard = require("guard")
@@ -121,24 +125,17 @@ local LAYOUT = {
 }
 
 -- ---------------------------------------------------------------
--- config access, including the nested axis.* keys
+-- config access
+--
+-- These used to resolve dotted `axis.swapXY` keys into the nested table.
+-- That was the only nested group in the settings, and it is gone, so the
+-- pattern match is gone with it - it ran for every control on every poll.
 -- ---------------------------------------------------------------
 local function readKey(cfg, key)
-    local a, b = key:match("^(%w+)%.(%w+)$")
-    if a then
-        local t = cfg[a]
-        return type(t) == "table" and t[b] or nil
-    end
     return cfg[key]
 end
 
 local function writeKey(cfg, key, value)
-    local a, b = key:match("^(%w+)%.(%w+)$")
-    if a then
-        if type(cfg[a]) ~= "table" then cfg[a] = {} end
-        cfg[a][b] = value
-        return
-    end
     cfg[key] = value
 end
 

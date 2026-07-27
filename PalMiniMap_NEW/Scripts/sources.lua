@@ -33,6 +33,7 @@
 -- =====================================================================
 
 local guard = require("guard")
+local assets = require("assets")
 
 local M = {}
 
@@ -261,26 +262,23 @@ local nearScratch = {}
 -- build, so NOTHING is filtered and behaviour is exactly what it was.
 -- That is what makes this incapable of repeating 2.0.6.
 -- ---------------------------------------------------------------
+-- 2.1.1: THIS FUNCTION NO LONGER LOADS ANYTHING. 2.1.0 probed with its own
+-- StaticFindObject + LoadAsset, six per scan, on the scan tick - and then
+-- render.lua loaded the very same path a second time through its own queue.
+-- Both halves are now one throttled queue in assets.lua, and everything
+-- here is table work: `assets.probe` answers from its cache, or schedules
+-- the work and says "not yet". The species path is also exactly the path
+-- the icon will be drawn with, so asking the question warms the cache for
+-- the draw - the two are the same request, made once.
 local iconForTribe = {}         -- tribe -> asset path. POSITIVE results only,
                                 -- and permanent: an asset does not stop existing
 local notAPal = {}              -- tribe -> true. Negative results, and they are
                                 -- NOT permanent - see below
-local iconMisses = {}           -- tribe -> failed probes so far
-local probedAt = {}             -- tribe -> the scan that last probed it
+local pathForTribe = {}         -- tribe -> formatted path, so the scan does not
+                                -- string.format the same path every four seconds
 local iconFormatWorks = false   -- one resolved icon proves the path format
-local PROBE_PER_SCAN = 6        -- LoadAsset is synchronous: spread the cost
-local MISS_RETRIES = 3          -- before a tribe is declared "not a species"
-local probesLeft, scanSerial = 0, 0
 local noIconNames, noIconCount = {}, 0
 local reportedNoIcon = false
-
-local function assetExists(path)
-    local o = guard.get(StaticFindObject, path)
-    if o ~= nil and guard.alive(o) then return true end
-    guard.get(LoadAsset, path)
-    o = guard.get(StaticFindObject, path)
-    return o ~= nil and guard.alive(o)
-end
 
 -- Returns the icon path for a real pal species, `false` for something that
 -- has none (a human), or nil while we have not settled the question.
@@ -288,29 +286,30 @@ end
 -- A NEGATIVE IS NEVER TAKEN ON THE FIRST TRY. Palworld streams its assets:
 -- a probe that runs during a load screen can come back empty for a species
 -- that is perfectly real, and caching that permanently would draw that
--- species as a human for the rest of the session. It takes MISS_RETRIES
--- scans in a row, at most one probe per tribe per scan, and the negatives
--- are dropped again on a world change (M.forget) while the positives are
--- kept. Until it is settled the actor is treated as a pal, which is the
--- pre-2.1.0 behaviour and therefore always the safe direction to be wrong.
+-- species as a human for the rest of the session. The retry policy lives
+-- in assets.lua (three attempts with a growing backoff, all forgiven on a
+-- world change) and `nil` here means it has not finished trying. Until it
+-- is settled the actor is treated as a pal, which is the pre-2.1.0
+-- behaviour and therefore always the safe direction to be wrong.
 local function speciesIcon(tribe)
     if tribe == nil or tribe == "" then return false end
     local hit = iconForTribe[tribe]
     if hit ~= nil then return hit end
     if notAPal[tribe] then return false end
-    if probesLeft <= 0 or probedAt[tribe] == scanSerial then return nil end
-    probedAt[tribe] = scanSerial
-    probesLeft = probesLeft - 1
-    local path = string.format(PAL_ICON_FMT, tribe, tribe)
-    if assetExists(path) then
+
+    local path = pathForTribe[tribe]
+    if path == nil then
+        path = string.format(PAL_ICON_FMT, tribe, tribe)
+        pathForTribe[tribe] = path
+    end
+
+    local exists = assets.probe(path)
+    if exists == nil then return nil end        -- still queued
+    if exists then
         iconForTribe[tribe] = path
-        iconMisses[tribe] = nil
         iconFormatWorks = true
         return path
     end
-    local misses = (iconMisses[tribe] or 0) + 1
-    iconMisses[tribe] = misses
-    if misses < MISS_RETRIES then return nil end
     notAPal[tribe] = true
     if noIconCount < 12 then
         noIconCount = noIconCount + 1
@@ -350,7 +349,6 @@ end
 
 function M.scanDynamic(cfg, px, py, zoom, playerPawn)
     local maxD2 = keepRadius2(zoom)
-    probesLeft, scanSerial = PROBE_PER_SCAN, scanSerial + 1
 
     wipe(S.pals); wipe(S.players); wipe(S.npcs)
 
@@ -717,9 +715,13 @@ function M.forget()
     -- the per-kind caches hold world positions from the OLD level
     kindCache, kindSeen, rotation = {}, {}, 1
     -- Species icons that RESOLVED are kept - the asset still exists. The
-    -- ones that did not are dropped, so a species first met during a load
-    -- screen gets another chance instead of being a "human" forever.
-    notAPal, iconMisses = {}, {}
+    -- ones that did not are re-decided, so a species first met during a
+    -- load screen gets another chance instead of being a "human" forever.
+    -- This is free even on a teleport, where nothing has really changed:
+    -- assets.lua still remembers which paths it gave up on, so a re-probe
+    -- answers `false` again immediately without touching the disk. Only a
+    -- genuine world change clears THAT, and main.lua does it there.
+    notAPal = {}
     -- drop the actor references the pools would otherwise keep alive
     for i = 1, #nearScratch do nearScratch[i].actor = nil end
 end

@@ -86,17 +86,18 @@ end
 
 local config   = needModule("config")
 local worldmap = needModule("worldmap")
+local assets   = needModule("assets")
 local render   = needModule("render")
 local sources  = needModule("sources")
 local menu     = needModule("menu")
-if config == nil or worldmap == nil or render == nil or sources == nil or menu == nil then
+if config == nil or worldmap == nil or assets == nil
+   or render == nil or sources == nil or menu == nil then
     guard.log("PalMiniMap is disabled for this session (missing module above).")
     do return end
 end
 
 config.setPath((SCRIPT_DIR or ".") .. "/../minimap_settings.json")
 local cfg = config.load()
-worldmap.setAxis(cfg.axis)
 
 -- ---------------------------------------------------------------
 -- Deferred settings write
@@ -588,6 +589,7 @@ local function maintenanceTick()
     if name == nil then
         render.destroy()
         sources.forget()
+        assets.forget()           -- every UObject we cached died with it
         lastDrawSourceVersion = -1
         cachedPC = nil
         forgetGameMenu()
@@ -598,6 +600,7 @@ local function maintenanceTick()
         worldName = name
         render.destroy()
         sources.forget()
+        assets.forget()
         lastDrawSourceVersion = -1
         menu.worldChanged(name)   -- the menu widget died with the old world
         worldmap.recalibrate()
@@ -748,9 +751,8 @@ end
 -- Menu wiring
 --
 -- Anything the menu changes has to take effect immediately. Most settings
--- are simply read on the next tick, but a size change means the widget
--- was built at the wrong dimensions, and the axis controls have to be
--- pushed into worldmap before the next draw.
+-- are simply read on the next tick, but a size change means the widget was
+-- built at the wrong dimensions.
 -- ---------------------------------------------------------------
 -- `circular` is here because the disc is real clipped geometry now, not a
 -- decal painted over a square map, so the shape is decided at build time.
@@ -769,7 +771,6 @@ menu.onCommit = function(keys)
         elseif key == "mapQuality" then
             render.applyQuality(cfg)
         elseif key == "opacity" then relayout = true
-        elseif key:sub(1, 5) == "axis." then worldmap.setAxis(cfg.axis)
         elseif key == "enabled" then render.setVisible(cfg.enabled)
         elseif key:sub(1, 4) == "show" or key == "onlyShinyPals"
             or key == "hideCollected" or key == "megazoom"
@@ -1005,6 +1006,12 @@ local function pump()
     if wantMove then
         lastMove = now
         guard.try("movementTick", movementTick)
+        -- AFTER the draw, never before it. The one place in the mod that
+        -- is allowed to call LoadAsset, and it is deliberately the last
+        -- thing in the tick: whatever it costs is paid once the frame's
+        -- real work is already done, and its own throttle (assets.lua)
+        -- decides whether it may spend anything at all this time round.
+        guard.try("assetPump", assets.pump)
     end
 
     -- the state buffer is reused, so the pawn reference in it has to be
@@ -1026,6 +1033,7 @@ guard.register("world transition hook", function()
     RegisterLoadMapPreHook(guard.callback("LoadMapPreHook", function()
         render.destroy()
         sources.forget()
+        assets.forget()
         lastDrawSourceVersion = -1
         cachedPC = nil
         forgetGameMenu()
