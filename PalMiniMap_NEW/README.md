@@ -143,6 +143,40 @@ hatch is `calibrate()`, which reads the live bounds out of the game's own
 iterates the defaults, so the retired `axis` block is ignored on load and gone
 from the file after the next save.
 
+**Fixed in 2.1.4 — alpha pals were being drawn as human NPCs, and the `PalUtility`
+call convention, both straight off the in-game log.**
+
+2.1.3's probe did its job. `UE4SS.log` said, exactly:
+
+```
+PalUtility: found at /Script/Pal.Default__PalUtility, but GetPalMonsters(ctx) raised:
+  UFunction expected 2 parameters, received 1
+PalUtility: found at /Script/Pal.Default__PalUtility, GetPalMonsters(ctx, out) returned nil
+no species icon for: FoxMage_BOSS, FunnelCharacter_RaijinDaughter, VioletFairy_BOSS,
+  Ronin_Boss, Serpent_BOSS - drawn as NPC humans, not as pals
+```
+
+**Alpha pals.** This is the quieter half of "not all pals show on the map", and it is
+plainly visible above. Alphas are named `BP_<Species>_BOSS_C_<id>` and reuse the **base**
+species portrait — there is no `T_FoxMage_BOSS_icon_normal` — so the icon probe failed and
+2.1.2's "a pal is something with a species icon" rule classified every alpha in the world
+as a human NPC. The exact tribe is still tried first, because some variants genuinely do
+have their own row (`FlameBuffalo_Ice`), and only a `_BOSS` suffix falls back to the base
+species. Deliberately *only* `_BOSS`, not any trailing segment: dropping the last segment
+of everything would send each human tribe on a second wild-goose chase too
+(`NPC_Villager` → `NPC`), and each of those costs three more failed synchronous loads for
+an asset that never existed. If some other suffix turns out to share a portrait, the
+`no species icon for:` line names it.
+
+**The call convention.** The arity is settled — UE4SS wants the `out` slot passed
+explicitly. What it does *not* do is hand the filled array back as the first return value,
+which is what 2.1.3 assumed. Three conventions are now all read from a single call: the
+array may arrive as a **later** return value (a void function returns `nil` first, then its
+out params), UE4SS may fill in **the very table that was passed**, or it may wrap the
+result in a `RemoteUnrealParam` that has to be opened with `:get()` — the same wrapper
+`asBool` already needs for reflected booleans. The probe now reports which one won, e.g.
+`GetPalMonsters(ctx, out) -> lua table in the out table, 30 monsters`.
+
 **Fixed in 2.1.3 — 2.1.2's `PalUtility` switch never actually engaged in game.**
 
 The log said `character scan via FindAllOf` and nothing else, because every way the

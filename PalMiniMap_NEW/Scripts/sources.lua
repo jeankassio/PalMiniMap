@@ -290,14 +290,36 @@ local UTIL_MAX_PROBES = 40      -- "works but empty" retries, ~2.5 min of scans
 
 local monstersBuf, humansBuf, playersBuf = {}, {}, {}
 
--- the call shapes, in the order they are tried
+-- The call shapes, in the order they are tried. WHAT THE GAME ACTUALLY
+-- SAID (2.1.3's probe, in UE4SS.log):
+--
+--   GetPalMonsters(ctx)      -> UFunction expected 2 parameters, received 1
+--   GetPalMonsters(ctx, out) -> returned nil
+--   GetPalMonsters()         -> UFunction expected 2 parameters, received 0
+--
+-- So the arity is settled: UE4SS wants the `out` slot passed explicitly.
+-- What it does NOT do is hand the filled array back as the first return
+-- value, which is what 2.1.3 assumed. Two conventions remain, and both are
+-- now read: the array can come back as a LATER return value (a void
+-- function returns nil first, then its out params), or UE4SS can fill in
+-- the very table that was passed. `outSlot` is shared and reused so the
+-- caller can look at it afterwards either way.
+local outSlot = {}
+
+local function clearSlot()
+    for i = #outSlot, 1, -1 do outSlot[i] = nil end
+end
+
+local function callCtxOut(util, name, ctx)
+    clearSlot()
+    return util[name](util, ctx, outSlot)
+end
 local function callCtx(util, name, ctx) return util[name](util, ctx) end
-local function callCtxOut(util, name, ctx) return util[name](util, ctx, {}) end
 local function callBare(util, name) return util[name](util) end
 
 local SHAPES = {
+    { name = "(ctx, out)", fn = callCtxOut, slot = true },
     { name = "(ctx)",      fn = callCtx },
-    { name = "(ctx, out)", fn = callCtxOut },
     { name = "()",         fn = callBare },
 }
 
@@ -321,7 +343,8 @@ local function forEachCollect(a, b)
 end
 
 -- `describe` is filled in with how the value was read, for the probe log.
-local function toArray(v, out, describe)
+-- `unwrapped` guards the one recursion below.
+local function toArray(v, out, describe, unwrapped)
     if v == nil then
         if describe then describe[1] = "nil" end
         return nil
@@ -367,6 +390,20 @@ local function toArray(v, out, describe)
         return got
     end
 
+    -- UE4SS hands some out parameters back wrapped in a RemoteUnrealParam,
+    -- which is read with :get(). Same trick asBool() needs for reflected
+    -- booleans. One level only.
+    if not unwrapped then
+        local inner = guard.get(rawUnwrap, v)
+        if inner ~= nil and inner ~= v then
+            local n2 = toArray(inner, out, describe, true)
+            if n2 ~= nil then
+                if describe then describe[1] = ":get() -> " .. tostring(describe[1]) end
+                return n2
+            end
+        end
+    end
+
     if describe then describe[1] = type(v) .. " (unreadable)" end
     return nil
 end
@@ -392,6 +429,27 @@ end
 
 -- Run once. Works out whether PalUtility can be used at all and, if so,
 -- which call shape and which array shape to use, and says so in the log.
+-- Make ONE call and find the list wherever this build chose to put it:
+-- any of the return values, or the out table we handed in. Returns the
+-- count and, for the probe's benefit, where it was found; on a raised
+-- call it returns nil plus the error text.
+local function callAndRead(shape, util, name, ctx, out, describe)
+    local ok, a, b, c = pcall(shape.fn, util, name, ctx)
+    if not ok then return nil, tostring(a) end
+
+    local n = toArray(a, out, describe)
+    if n ~= nil then return n, "1st return" end
+    n = toArray(b, out, describe)
+    if n ~= nil then return n, "2nd return" end
+    n = toArray(c, out, describe)
+    if n ~= nil then return n, "3rd return" end
+    if shape.slot then
+        n = toArray(outSlot, out, describe)
+        if n ~= nil then return n, "the out table" end
+    end
+    return nil, nil
+end
+
 -- Returns "ok" once a call shape has been proven, "empty" when a shape
 -- worked but the level currently has no monsters in it, or false when
 -- nothing worked.
@@ -416,34 +474,29 @@ local function probeUtility(ctx, verbose)
     local describe, sawEmpty = {}, false
     for i = 1, #SHAPES do
         local shape = SHAPES[i]
-        local ok, v = pcall(shape.fn, obj, "GetPalMonsters", ctx)
-        if not ok then
+        describe[1] = nil
+        local n, where = callAndRead(shape, obj, "GetPalMonsters", ctx, monstersBuf, describe)
+        if n == nil then
             if verbose then
-                guard.log(string.format("PalUtility: found at %s, but GetPalMonsters%s raised: %s",
-                    path, shape.name, tostring(v)))
+                guard.log(string.format("PalUtility: %s, GetPalMonsters%s %s",
+                    path, shape.name,
+                    where ~= nil and ("raised: " .. where)
+                        or ("gave nothing readable (" .. tostring(describe[1]) .. ")")))
             end
+        elseif n > 0 then
+            utilObj, utilShape = obj, shape
+            guard.log(string.format(
+                "PalUtility: using %s, GetPalMonsters%s -> %s in %s, %d monsters. "
+                .. "The game's own lists replace the object-array scan.",
+                path, shape.name, tostring(describe[1]), where, n))
+            return "ok"
         else
-            describe[1] = nil
-            local n = toArray(v, monstersBuf, describe)
-            if n ~= nil and n > 0 then
-                utilObj, utilShape = obj, shape
+            sawEmpty = true
+            if verbose then
                 guard.log(string.format(
-                    "PalUtility: using %s, GetPalMonsters%s -> %s, %d monsters. "
-                    .. "The game's own lists replace the object-array scan.",
-                    path, shape.name, tostring(describe[1]), n))
-                return "ok"
-            elseif n ~= nil then
-                sawEmpty = true
-                if verbose then
-                    guard.log(string.format(
-                        "PalUtility: %s, GetPalMonsters%s -> %s but empty; retrying, because "
-                        .. "an empty level and a wrong call shape look the same from here",
-                        path, shape.name, tostring(describe[1])))
-                end
-            elseif verbose then
-                guard.log(string.format(
-                    "PalUtility: found at %s, GetPalMonsters%s returned %s which is not a "
-                    .. "readable list", path, shape.name, tostring(describe[1])))
+                    "PalUtility: %s, GetPalMonsters%s -> %s in %s but EMPTY; retrying, because "
+                    .. "an empty level and a wrong call shape look the same from here",
+                    path, shape.name, tostring(describe[1]), where))
             end
         end
     end
@@ -459,9 +512,7 @@ end
 -- Returns the filled buffer and a count, or nil to mean "use FindAllOf".
 local function utilityList(name, ctx, out)
     if utilObj == nil or utilShape == nil then return nil end
-    local ok, v = pcall(utilShape.fn, utilObj, name, ctx)
-    if not ok then return nil end
-    return toArray(v, out, nil)
+    return (callAndRead(utilShape, utilObj, name, ctx, out, nil))
 end
 
 -- ---------------------------------------------------------------
@@ -507,6 +558,8 @@ local notAPal = {}              -- tribe -> true. Negative results, and they are
                                 -- NOT permanent - see below
 local pathForTribe = {}         -- tribe -> formatted path, so the scan does not
                                 -- string.format the same path every four seconds
+local baseTribe = {}            -- tribe -> species without its variant suffix,
+                                -- or false when it has none
 local iconFormatWorks = false   -- one resolved icon proves the path format
 local noIconNames, noIconCount = {}, 0
 local reportedNoIcon = false
@@ -522,25 +575,65 @@ local reportedNoIcon = false
 -- world change) and `nil` here means it has not finished trying. Until it
 -- is settled the actor is treated as a pal, which is the pre-2.1.0
 -- behaviour and therefore always the safe direction to be wrong.
+local function iconPathFor(tribe)
+    local path = pathForTribe[tribe]
+    if path == nil then
+        path = string.format(PAL_ICON_FMT, tribe, tribe)
+        pathForTribe[tribe] = path
+    end
+    return path
+end
+
 local function speciesIcon(tribe)
     if tribe == nil or tribe == "" then return false end
     local hit = iconForTribe[tribe]
     if hit ~= nil then return hit end
     if notAPal[tribe] then return false end
 
-    local path = pathForTribe[tribe]
-    if path == nil then
-        path = string.format(PAL_ICON_FMT, tribe, tribe)
-        pathForTribe[tribe] = path
-    end
-
-    local exists = assets.probe(path)
+    local exists = assets.probe(iconPathFor(tribe))
     if exists == nil then return nil end        -- still queued
     if exists then
-        iconForTribe[tribe] = path
+        iconForTribe[tribe] = pathForTribe[tribe]
         iconFormatWorks = true
-        return path
+        return pathForTribe[tribe]
     end
+
+    -- THE EXACT TRIBE HAS NO ICON. That is not the same as "not a pal".
+    --
+    -- Alpha/boss pals are named BP_<Species>_BOSS_C_<id>, and they reuse
+    -- the BASE species portrait - there is no T_FoxMage_BOSS_icon_normal.
+    -- 2.1.2 therefore classified every alpha in the world as a human NPC:
+    -- the in-game log said, in as many words,
+    --   no species icon for: FoxMage_BOSS, VioletFairy_BOSS, Ronin_Boss,
+    --   Serpent_BOSS - drawn as NPC humans, not as pals
+    -- which is a second, quieter half of "not all pals show on the map".
+    --
+    -- The full name is still tried FIRST, because some variants genuinely
+    -- do have their own row (FlameBuffalo_Ice), and only then is the base
+    -- species tried.
+    --
+    -- ONLY for a _BOSS suffix, though, and deliberately not for any
+    -- trailing segment. Dropping the last segment of anything would send
+    -- every human tribe on a second wild-goose chase as well
+    -- (NPC_Villager -> NPC, NPC_Merchant -> NPC), and each of those costs
+    -- three more failed synchronous loads for an asset that was never
+    -- going to exist. If some other suffix turns out to reuse the base
+    -- portrait, the "no species icon for:" line in the log names it.
+    local base = baseTribe[tribe]
+    if base == nil then
+        base = tribe:match("^(.+)_[Bb][Oo][Ss][Ss]$") or false
+        baseTribe[tribe] = base
+    end
+    if base then
+        local baseExists = assets.probe(iconPathFor(base))
+        if baseExists == nil then return nil end
+        if baseExists then
+            iconForTribe[tribe] = pathForTribe[base]
+            iconFormatWorks = true
+            return pathForTribe[base]
+        end
+    end
+
     notAPal[tribe] = true
     if noIconCount < 12 then
         noIconCount = noIconCount + 1
