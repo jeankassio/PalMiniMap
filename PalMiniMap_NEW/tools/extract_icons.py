@@ -29,6 +29,16 @@ Assim o Lua nao precisa de tabela nenhuma: ele deriva o nome do arquivo do
 caminho do asset que ja ia pedir. O que nao tiver PNG cai sozinho no
 LoadAsset de sempre.
 
+CUIDADO: OS PNG SAO ARTE AUTORAL AGORA
+--------------------------------------
+Os icones em `icons/` foram REESTILIZADOS a mao (arredondados, estilo unico) -
+nao sao mais so o que saiu do pak. Por isso este script NAO sobrescreve nada
+por padrao: ele so grava o que ainda nao existe, e diz quantos pulou. Rodar
+sem querer e perder o trabalho de estilo de 455 arquivos.
+
+    python tools/extract_icons.py            # so o que falta
+    python tools/extract_icons.py --force    # regrava TUDO, apaga o estilo
+
 USO
     python tools/extract_icons.py
 
@@ -239,13 +249,19 @@ def main() -> int:
     print(f"[2/3] desempacotando {len(stems)} texturas")
     unpack(stems)
 
-    print("[3/3] convertendo para PNG")
+    force = "--force" in sys.argv
+    print("[3/3] convertendo para PNG" + (" (--force: REGRAVANDO TUDO)" if force else ""))
     ICONS_OUT.mkdir(parents=True, exist_ok=True)
     failures: dict[str, str] = {}
-    written = total = 0
+    written = skipped = total = 0
     for stem in sorted(stems):
         name = stem.rsplit("/", 1)[-1]
         dest = ICONS_OUT / f"{name}.png"
+        # O que ja esta la pode ter sido reestilizado a mao. Ver o aviso no
+        # topo: sobrescrever e destrutivo e nao da para desfazer.
+        if dest.exists() and not force:
+            skipped += 1
+            continue
         error = convert(stem, dest)
         if error is None:
             written += 1
@@ -253,7 +269,10 @@ def main() -> int:
         else:
             failures[name] = error
 
-    print(f"  {written} PNG em {ICONS_OUT.relative_to(ROOT)} ({total / 1024 / 1024:.1f} MB)")
+    print(f"  {written} PNG novos em {ICONS_OUT.relative_to(ROOT)} "
+          f"({total / 1024 / 1024:.1f} MB)")
+    if skipped:
+        print(f"  {skipped} preservados (ja existiam) - use --force para regravar")
     if failures:
         print(f"  {len(failures)} falharam:")
         for name, reason in list(failures.items())[:10]:

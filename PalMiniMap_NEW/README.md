@@ -1,10 +1,15 @@
 # PalMiniMap 2.2 — native minimap for Palworld
 
 A complete rewrite. No blueprint, **no `.pak`** — the whole mod is UE4SS Lua
-driving UMG, drawing the game's own world map texture and the game's own icon
-art. Since 2.2.0 that icon art is shipped as loose PNG in `icons/`, extracted
-from the game's own `.pak` by `tools/extract_icons.py`; see
+driving UMG, drawing the game's own world map texture. Since 2.2.0 the icons
+are shipped as loose PNG in `icons/`, and since 2.2.1 that set is **restyled
+art** (rounded, one consistent look) rather than a copy of the game's — so the
+files always win over whatever the game has in memory. See
 [Why the icons are files](#why-the-icons-are-files-220).
+
+> **`icons/` is authored work.** `tools/extract_icons.py` refuses to overwrite
+> an existing PNG; it only fills gaps. `--force` regenerates everything from
+> the `.pak` and **destroys the styling**.
 
 ## Why it was rewritten
 
@@ -153,8 +158,17 @@ transient texture has no mip chain and the minimap draws them at 10–40 px;
 doing the filtering once at extraction is what the mip chain would have done
 every frame.
 
-Three things are load-bearing and easy to break:
+Four things are load-bearing and easy to break:
 
+* **The shipped file always wins (2.2.1).** Up to 2.2.0 the loader tried
+  `StaticFindObject` first, because adopting a texture the game already had
+  resident is free. That was right while `icons/` held the game's own art and
+  wrong the moment it stopped: the compass and marker icons are exactly the
+  ones the game itself loads, so those came out in the original square style
+  next to restyled portraits. Being free is not worth being wrong. A resident
+  copy is now only used for a path we ship no file for, and the 30-second log
+  line **names** every texture that fell back — an unstyled icon otherwise
+  looks like a perfectly working icon.
 * **Anything without a PNG still takes the old road.** The world map texture
   above all — it is enormous and loaded exactly once, so shipping it would cost
   tens of MB and remove no stutter. If `icons/` is missing, or the engine
