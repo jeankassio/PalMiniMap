@@ -265,79 +265,203 @@ M.STATIC_PAD = 15000
 -- not come back in a shape we can read, the FindAllOf path below is used
 -- exactly as before, and which one is in use is logged once.
 -- ---------------------------------------------------------------
-local UTIL_PATH = "/Script/Pal.Default__PalUtility"
+-- WHY THIS IS SO DEFENSIVE. The first attempt at this (2.1.2) collapsed
+-- every possible failure into a silent nil, so the in-game log said only
+-- "via FindAllOf" and there was no way to tell whether the CDO was
+-- missing, the call had raised, or the return value was in a shape we
+-- could not read. It is now probed ONCE, every step is reported, and the
+-- working call shape is remembered. One line in UE4SS.log answers it.
+--
+-- The two things that genuinely vary between UE4SS builds:
+--   * whether an `out` parameter has to be passed a placeholder slot, and
+--   * what a returned TArray looks like on the Lua side (plain table,
+--     userdata with GetArrayNum/GetArrayElement, or ForEach-only).
+-- Both are tried rather than assumed.
+local UTIL_PATHS = {
+    "/Script/Pal.Default__PalUtility",
+    "/Script/Pal.PalUtility",
+}
 local utilObj = nil
 local utilState = 0     -- 0 untried, 1 usable, 2 unavailable
-local utilTries = 0
-local UTIL_MAX_TRIES = 6
+local utilShape = nil   -- which call form worked
+local utilTries, utilProbes = 0, 0
+local UTIL_MAX_TRIES = 3        -- outright failures before giving up
+local UTIL_MAX_PROBES = 40      -- "works but empty" retries, ~2.5 min of scans
 
 local monstersBuf, humansBuf, playersBuf = {}, {}, {}
 
-local function rawUtilCall(util, name, ctx) return util[name](util, ctx) end
+-- the call shapes, in the order they are tried
+local function callCtx(util, name, ctx) return util[name](util, ctx) end
+local function callCtxOut(util, name, ctx) return util[name](util, ctx, {}) end
+local function callBare(util, name) return util[name](util) end
+
+local SHAPES = {
+    { name = "(ctx)",      fn = callCtx },
+    { name = "(ctx, out)", fn = callCtxOut },
+    { name = "()",         fn = callBare },
+}
+
 local function rawArrayNum(arr) return arr:GetArrayNum() end
 local function rawArrayAt(arr, i) return arr:GetArrayElement(i) end
 local function rawForEach(arr, fn) arr:ForEach(fn) end
 
 -- Fill `out` from whatever shape UE4SS hands back for a TArray out
--- parameter. Builds differ: some give a plain Lua table, some a TArray
--- userdata with GetArrayNum/GetArrayElement, some only ForEach. Returns
--- the count, or nil if the value is not a list at all.
+-- parameter. Returns the count, or nil if the value is not a list at all.
 local forEachOut, forEachCount = nil, 0
 
-local function forEachCollect(_, elem)
-    if elem ~= nil then
+local function forEachCollect(a, b)
+    -- ForEach hands back (index, element) on most builds and (element) on
+    -- some; take whichever argument is not a number.
+    local elem = b
+    if elem == nil or type(elem) == "number" then elem = a end
+    if elem ~= nil and type(elem) ~= "number" then
         forEachCount = forEachCount + 1
         forEachOut[forEachCount] = elem
     end
 end
 
-local function toArray(v, out)
-    if v == nil then return nil end
-
-    if type(v) == "table" then
-        local n = #v
-        for i = 1, n do out[i] = v[i] end
-        for i = #out, n + 1, -1 do out[i] = nil end
-        return n
+-- `describe` is filled in with how the value was read, for the probe log.
+local function toArray(v, out, describe)
+    if v == nil then
+        if describe then describe[1] = "nil" end
+        return nil
     end
 
+    -- GetArrayNum FIRST, before the plain-table case. A UE4SS build that
+    -- wraps the array in a Lua table with methods on it would otherwise be
+    -- read with `#v` - which is 0, because the elements are behind
+    -- GetArrayElement, not in the array part - and the whole list would
+    -- silently come back empty.
     local n = guard.get(rawArrayNum, v)
     if type(n) == "number" and n >= 0 then
         local count = 0
-        for i = 1, n do
+        -- GetArrayElement is 1-based on some builds and 0-based on others;
+        -- reading both ends and dropping nils covers either without
+        -- needing to know which.
+        for i = 0, n do
             local e = guard.get(rawArrayAt, v, i)
             if e ~= nil then count = count + 1; out[count] = e end
         end
         for i = #out, count + 1, -1 do out[i] = nil end
-        return count
+        if describe then describe[1] = "TArray:GetArrayNum=" .. n end
+        if count > 0 then return count end
+        -- an array that reports a size but yields nothing is not usable
+        if n == 0 then return 0 end
+    end
+
+    if type(v) == "table" then
+        local len = #v
+        for i = 1, len do out[i] = v[i] end
+        for i = #out, len + 1, -1 do out[i] = nil end
+        if describe then describe[1] = "lua table" end
+        return len
     end
 
     forEachOut, forEachCount = out, 0
-    local ok = guard.get(rawForEach, v, forEachCollect)
+    guard.get(rawForEach, v, forEachCollect)
+    local got = forEachCount
     forEachOut = nil
-    if ok == nil and forEachCount == 0 then return nil end
-    for i = #out, forEachCount + 1, -1 do out[i] = nil end
-    return forEachCount
+    if got > 0 then
+        for i = #out, got + 1, -1 do out[i] = nil end
+        if describe then describe[1] = "TArray:ForEach" end
+        return got
+    end
+
+    if describe then describe[1] = type(v) .. " (unreadable)" end
+    return nil
+end
+
+local function findUtility()
+    for i = 1, #UTIL_PATHS do
+        local o = guard.get(StaticFindObject, UTIL_PATHS[i])
+        -- NOTE: no guard.alive() here. IsValid() is an actor-ish notion and
+        -- a class default object is not required to answer it; requiring it
+        -- would throw away a perfectly good CDO.
+        if o ~= nil then return o, UTIL_PATHS[i] end
+    end
+    -- Last resort, and independent of how the path string has to be
+    -- spelled on this build: FindFirstOf matches by class name and returns
+    -- the class default object for a class that has no instances - which
+    -- is exactly what a function library is. (The same CDO-first behaviour
+    -- that had to be worked around when hunting the Esc menu widget is the
+    -- useful case here.)
+    local o = guard.get(FindFirstOf, "PalUtility")
+    if o ~= nil then return o, "FindFirstOf('PalUtility')" end
+    return nil, nil
+end
+
+-- Run once. Works out whether PalUtility can be used at all and, if so,
+-- which call shape and which array shape to use, and says so in the log.
+-- Returns "ok" once a call shape has been proven, "empty" when a shape
+-- worked but the level currently has no monsters in it, or false when
+-- nothing worked.
+--
+-- AN EMPTY LIST IS NOT PROOF. A wrong call shape and an empty world look
+-- exactly alike from here, and committing on an empty result is how the
+-- first cut of this ended up drawing no pals at all. So a shape is only
+-- adopted once it has actually produced something, and "empty" costs a
+-- cheap retry on the next scan rather than a decision.
+--
+-- `verbose` is true only for the first attempt: enough to diagnose, without
+-- writing the same three lines to UE4SS.log once per retry.
+local function probeUtility(ctx, verbose)
+    local obj, path = findUtility()
+    if obj == nil then
+        if verbose then
+            guard.log("PalUtility: no object at " .. table.concat(UTIL_PATHS, " or "))
+        end
+        return false
+    end
+
+    local describe, sawEmpty = {}, false
+    for i = 1, #SHAPES do
+        local shape = SHAPES[i]
+        local ok, v = pcall(shape.fn, obj, "GetPalMonsters", ctx)
+        if not ok then
+            if verbose then
+                guard.log(string.format("PalUtility: found at %s, but GetPalMonsters%s raised: %s",
+                    path, shape.name, tostring(v)))
+            end
+        else
+            describe[1] = nil
+            local n = toArray(v, monstersBuf, describe)
+            if n ~= nil and n > 0 then
+                utilObj, utilShape = obj, shape
+                guard.log(string.format(
+                    "PalUtility: using %s, GetPalMonsters%s -> %s, %d monsters. "
+                    .. "The game's own lists replace the object-array scan.",
+                    path, shape.name, tostring(describe[1]), n))
+                return "ok"
+            elseif n ~= nil then
+                sawEmpty = true
+                if verbose then
+                    guard.log(string.format(
+                        "PalUtility: %s, GetPalMonsters%s -> %s but empty; retrying, because "
+                        .. "an empty level and a wrong call shape look the same from here",
+                        path, shape.name, tostring(describe[1])))
+                end
+            elseif verbose then
+                guard.log(string.format(
+                    "PalUtility: found at %s, GetPalMonsters%s returned %s which is not a "
+                    .. "readable list", path, shape.name, tostring(describe[1])))
+            end
+        end
+    end
+    if sawEmpty then return "empty" end
+    return false
 end
 
 local function utility()
-    if utilState == 2 then return nil end
-    if utilObj ~= nil and guard.alive(utilObj) then return utilObj end
-    utilObj = guard.get(StaticFindObject, UTIL_PATH)
-    if utilObj == nil or not guard.alive(utilObj) then
-        utilObj = nil
-        return nil
-    end
+    if utilState ~= 1 then return nil end
     return utilObj
 end
 
 -- Returns the filled buffer and a count, or nil to mean "use FindAllOf".
 local function utilityList(name, ctx, out)
-    if ctx == nil then return nil end
-    local util = utility()
-    if util == nil then return nil end
-    local v = guard.get(rawUtilCall, util, name, ctx)
-    return toArray(v, out)
+    if utilObj == nil or utilShape == nil then return nil end
+    local ok, v = pcall(utilShape.fn, utilObj, name, ctx)
+    if not ok then return nil end
+    return toArray(v, out, nil)
 end
 
 -- ---------------------------------------------------------------
@@ -487,11 +611,11 @@ local function inWorld(actor)
         end
     end
 
+    -- No latching when PalUtility is simply not in use: that is not the
+    -- property being unreadable, and bHidden alone still does its job.
     if deadReadable ~= false then
         local util = utility()
-        if util == nil then
-            deadReadable = false
-        else
+        if util ~= nil then
             local ok, v = pcall(rawIsDead, util, actor)
             if ok then
                 deadReadable = true
@@ -704,24 +828,37 @@ function M.scanDynamic(cfg, px, py, zoom, playerPawn)
     wipe(S.pals); wipe(S.players); wipe(S.npcs)
 
     if cfg.showPals or cfg.showNPCs or cfg.showPlayers then
-        local ok = false
-        if utilState ~= 2 then
-            ok = scanViaUtility(cfg, px, py, maxD2, playerPawn, playerPawn) == true
-            if ok then
+        -- Probed once, at the first scan that has a world context. The CDO
+        -- of a native class exists from process start, so there is nothing
+        -- to wait for beyond that; a couple of retries only cover a probe
+        -- unlucky enough to land mid-load.
+        if utilState == 0 and playerPawn ~= nil then
+            utilProbes = utilProbes + 1
+            local r = probeUtility(playerPawn, utilProbes == 1)
+            if r == "ok" then
                 utilState = 1
-            elseif utilState == 0 then
-                -- Not "unavailable" on the first miss: the very first scans
-                -- can land while the world is still coming up. Only give up
-                -- after enough tries that a load screen cannot cost us the
-                -- fast path for the whole session.
+            elseif r == "empty" then
+                -- the call works, there is just nothing to see yet; keep
+                -- probing (it is one call) rather than deciding
+                if utilProbes >= UTIL_MAX_PROBES then
+                    utilState = 2
+                    guard.log("PalUtility answered, but never returned a single pal monster "
+                        .. "over " .. UTIL_MAX_PROBES .. " scans - scanning the object array instead.")
+                end
+            else
                 utilTries = utilTries + 1
                 if utilTries >= UTIL_MAX_TRIES then
                     utilState = 2
-                    guard.log("PalUtility is not reachable on this build; falling back to "
-                        .. "scanning the object array (pals and humans are told apart by "
-                        .. "their species icon instead)")
+                    guard.log("PalUtility could not be used on this build - scanning the "
+                        .. "object array instead, and telling pals from humans by their "
+                        .. "species icon. See the lines above for which step failed.")
                 end
             end
+        end
+
+        local ok = false
+        if utilState == 1 then
+            ok = scanViaUtility(cfg, px, py, maxD2, playerPawn, playerPawn) == true
         end
         if not ok then
             scanViaFindAll(cfg, px, py, maxD2, playerPawn)

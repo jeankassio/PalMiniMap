@@ -143,6 +143,36 @@ hatch is `calibrate()`, which reads the live bounds out of the game's own
 iterates the defaults, so the retired `axis` block is ignored on load and gone
 from the file after the next save.
 
+**Fixed in 2.1.3 — 2.1.2's `PalUtility` switch never actually engaged in game.**
+
+The log said `character scan via FindAllOf` and nothing else, because every way the
+lookup could fail collapsed into the same silent `nil`: missing CDO, raised call, and
+unreadable return value were indistinguishable. Four concrete faults, all now fixed
+and all covered in the harness:
+
+* **The CDO was thrown away by a validity check.** `guard.alive()` calls `IsValid()`,
+  which is an actor-ish notion — a class default object is not obliged to answer it.
+  Requiring it discarded a perfectly good `PalUtility`.
+* **Only one path spelling was tried.** Now `/Script/Pal.Default__PalUtility`, then
+  `/Script/Pal.PalUtility`, then `FindFirstOf("PalUtility")` — which matches by class
+  name and returns the CDO for a class with no instances, i.e. exactly a function
+  library, and does not depend on how the path string has to be spelled on this build.
+* **Only one call shape was tried.** Whether an `out` parameter needs a placeholder
+  slot varies between UE4SS builds, so `(ctx)`, `(ctx, out)` and `()` are each
+  attempted and the working one is remembered.
+* **The returned `TArray` was read table-first.** A build that wraps the array in a
+  Lua table with methods on it would be measured with `#v` — zero, because the elements
+  live behind `GetArrayElement` — and the list would come back silently empty.
+  `GetArrayNum` is tried first now, then plain table, then `ForEach`, and
+  `GetArrayElement` is read from both 0 and 1 so its base does not have to be known.
+
+Two further rules came out of getting this wrong. **An empty list is not proof a call
+shape works** — a wrong shape and an empty level look identical from Lua — so a shape is
+only adopted once it has actually produced something, and "empty" costs a cheap retry
+instead of a decision. And the whole thing is **probed once and reported**: one line in
+`UE4SS.log` now says which path, which call shape, which array shape and how many
+monsters, or exactly which step failed.
+
 **Fixed in 2.1.2 — the stutter while walking, and party pals on the map. Both
 came out of reading what 1.x actually did:**
 
