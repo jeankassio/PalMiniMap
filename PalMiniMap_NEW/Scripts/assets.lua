@@ -286,11 +286,6 @@ function M.pump()
     stageFind()
     stageLoad(now)
     revalidate()
-    -- One line, once. It answers the only question worth asking about this
-    -- file in a bug report: how much did the icons actually cost? It is on
-    -- a timer rather than on "the queue is empty" because a failed path
-    -- sits in a backoff for up to ten seconds and would otherwise be
-    -- counted before it had finished retrying.
     if reportedFill then return end
     if reportAt == nil then
         if (loadsDone + loadsFailed + adoptedFree) > 0 then
@@ -298,12 +293,8 @@ function M.pump()
         end
     elseif now >= reportAt then
         reportedFill = true
-        guard.log(string.format(
-            "texture fill: %d already resident (free), %d loaded, %d failed attempts",
-            adoptedFree, loadsDone, loadsFailed))
     end
 end
-
 -- ---------------------------------------------------------------
 -- Housekeeping
 -- ---------------------------------------------------------------

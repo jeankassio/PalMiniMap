@@ -438,6 +438,7 @@ end
 local GAME_MENU_CLASS = "WBP_InGameMainMenu_C"
 local GAME_MENU_TRIES = 60
 local GAME_MENU_SLOW  = 30.0
+local GAME_MENU_RETRY = 0.25
 local gameMenuWidgets = {}
 local gameMenuTries = 0
 local gameMenuRetryAt = 0.0
@@ -462,13 +463,14 @@ end
 local function refreshGameMenuWidget()
     if not cfg.hideBehindGameUi then return end
     if anyMenuWidgetAlive() then return end
+
+    local now = os.clock()
+    if now < gameMenuRetryAt then return end
+
     for i = #gameMenuWidgets, 1, -1 do gameMenuWidgets[i] = nil end
-    if gameMenuTries >= GAME_MENU_TRIES then
-        local now = os.clock()
-        if now < gameMenuRetryAt then return end
-        gameMenuRetryAt = now + GAME_MENU_SLOW
-    end
     gameMenuTries = gameMenuTries + 1
+    gameMenuRetryAt = now + ((gameMenuTries >= GAME_MENU_TRIES) and GAME_MENU_SLOW or GAME_MENU_RETRY)
+
     local found = guard.get(FindAllOf, GAME_MENU_CLASS)
     if type(found) ~= "table" then return end
     for i = 1, #found do
@@ -476,15 +478,13 @@ local function refreshGameMenuWidget()
         if guard.alive(w) then
             local n = guard.get(rawObjectName, w)
             n = n and tostring(n) or ""
-            -- the class default object is not a real widget
             if n:sub(1, 9) ~= "Default__" then
                 gameMenuWidgets[#gameMenuWidgets + 1] = w
             end
         end
     end
     if #gameMenuWidgets > 0 then
-        guard.log(string.format("found %d instance(s) of %s to watch for the game menu",
-                                #gameMenuWidgets, GAME_MENU_CLASS))
+        gameMenuRetryAt = 0.0
     end
 end
 
@@ -499,6 +499,8 @@ local function gameUiOpen()
     if not cfg.hideBehindGameUi then return false end
     if menu.isOpen() then return false end   -- our own window may stay up
     if gamePaused() then return true end
+
+    refreshGameMenuWidget()
     for i = 1, #gameMenuWidgets do
         local w = gameMenuWidgets[i]
         if guard.alive(w) and guard.get(rawInViewport, w) == true then
@@ -715,7 +717,6 @@ local function maintenanceTick()
 
     watchTeleport(frameState)
     refreshGameMenuWidget()
-    logViewportWidgets()
     ensureWidget()
     worldmap.calibrate()
 end

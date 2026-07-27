@@ -216,13 +216,11 @@ local function findAll(class, label)
     if type(found) == "table" and #found > 0 then
         if not S.reported[class] then
             S.reported[class] = true
-            guard.log(string.format("scan: %s -> '%s' (%d)", label, class, #found))
         end
         return found
     end
     if not S.reported[class] then
         S.reported[class] = true
-        guard.log(string.format("scan: %s -> '%s' found nothing", label, class))
     end
     return EMPTY
 end
@@ -489,16 +487,8 @@ local function elementsUsable(out, n, label)
     if n == nil or n == 0 then return true end
     if guard.alive(out[1]) then return true end
     if not badElements[label] then
-        badElements[label] = true
-        -- say plainly what was rejected and why, so this is never quietly
-        -- "fixed" by unwrapping again
         local inner = guard.get(rawUnwrap, out[1])
-        local wrapped = inner ~= nil and guard.alive(inner)
-        guard.log(label .. ": its list elements are "
-            .. (wrapped and "WRAPPED values, not objects that may be kept"
-                        or "not usable objects")
-            .. " - refusing to store them (2.1.5 did, and the game died with an access "
-            .. "violation four seconds later)")
+        badElements[label] = (inner ~= nil and guard.alive(inner)) and "wrapped" or "unreadable"
     end
     return false
 end
@@ -1132,8 +1122,6 @@ local function scanViaFindAll(cfg, px, py, maxD2, playerPawn)
     end
     if not reportedNoIcon and iconFormatWorks and noIconCount > 0 then
         reportedNoIcon = true
-        guard.log("no species icon for: " .. table.concat(noIconNames, ", ", 1, noIconCount)
-            .. " - drawn as NPC humans, not as pals (turn 'Show NPC humans' off to hide them)")
     end
 
     -- do not keep actor references alive in the scratch table
@@ -1164,14 +1152,16 @@ function M.scanDynamic(cfg, px, py, zoom, playerPawn)
                         .. "which.", n))
                 else
                     collectorObj = nil
+                    if badElements[COLLECTOR_CLASS] then
+                        collectorState = 2
+                        collectorTries = COLLECTOR_MAX_TRIES
+                    end
                 end
                 for i = 1, (n or 0) do allBuf[i] = nil end
             end
             if collectorState == 0 and collectorTries >= COLLECTOR_MAX_TRIES then
                 collectorState = 2
-                guard.log("PalObjectCollector is not readable on this build"
-                    .. (badElements[COLLECTOR_CLASS] and " (see above)" or "")
-                    .. "; trying PalUtility next.")
+                guard.log("PalObjectCollector is not readable on this build; trying PalUtility next.")
             end
         end
 
@@ -1213,7 +1203,7 @@ function M.scanDynamic(cfg, px, py, zoom, playerPawn)
                     utilState = 2
                     guard.log("PalUtility could not be used on this build - scanning the "
                         .. "object array instead, and telling pals from humans by their "
-                        .. "species icon. See the lines above for which step failed.")
+                        .. "species icon.")
                 end
             end
         end
