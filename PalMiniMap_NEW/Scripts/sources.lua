@@ -483,22 +483,22 @@ end
 -- needed for exactly that: their position, every frame. So there is no
 -- clever middle course here. If the elements do not arrive usable, the
 -- object-array scan is used instead - slower, and it has never crashed.
-local elementsBad = false
+local badElements = {}
 
-local function elementsUsable(out, n)
+local function elementsUsable(out, n, label)
     if n == nil or n == 0 then return true end
     if guard.alive(out[1]) then return true end
-    if not elementsBad then
-        elementsBad = true
+    if not badElements[label] then
+        badElements[label] = true
         -- say plainly what was rejected and why, so this is never quietly
         -- "fixed" by unwrapping again
         local inner = guard.get(rawUnwrap, out[1])
         local wrapped = inner ~= nil and guard.alive(inner)
-        guard.log("PalUtility: its list elements are "
+        guard.log(label .. ": its list elements are "
             .. (wrapped and "WRAPPED values, not objects that may be kept"
                         or "not usable objects")
             .. " - refusing to store them (2.1.5 did, and the game died with an access "
-            .. "violation four seconds later). Using the object-array scan instead.")
+            .. "violation four seconds later)")
     end
     return false
 end
@@ -536,7 +536,7 @@ local function probeUtility(ctx, verbose)
                     where ~= nil and ("raised: " .. where)
                         or ("gave nothing readable (" .. tostring(describe[1]) .. ")")))
             end
-        elseif n > 0 and not elementsUsable(monstersBuf, n) then
+        elseif n > 0 and not elementsUsable(monstersBuf, n, "PalUtility") then
             -- The call works; what it hands back is not something we may
             -- keep, so the LISTS are refused. IsDead is kept: it takes an
             -- actor we already own and returns a boolean, so nothing
@@ -575,7 +575,7 @@ end
 local function utilityList(name, ctx, out)
     if utilObj == nil or utilShape == nil then return nil end
     local n = callAndRead(utilShape, utilObj, name, ctx, out, nil)
-    if not elementsUsable(out, n) then return nil end
+    if not elementsUsable(out, n, "PalUtility") then return nil end
     return n
 end
 
@@ -852,6 +852,143 @@ local function addPal(cfg, actor, tribe, playerPawn)
     }
 end
 
+-- ---------------------------------------------------------------
+-- PalObjectCollector - the route that finally works
+--
+-- FOUND BY PARSING Palworld.usmap (the schema dump in _tools), not by
+-- guessing. The game keeps its own curated, already-classified lists:
+--
+--   PalObjectCollector.PalCharacter_All      Array<Object>
+--   PalObjectCollector.PalCharacter_NPC      Array<Object>
+--   PalObjectCollector.PalCharacter_Player   Array<Object>
+--
+-- and pals = All minus NPC minus Player. No object-array walk, and the
+-- classification is the game's own rather than anything inferred here.
+--
+-- WHY THIS ONE IS SAFE WHERE PalUtility WAS NOT, which is the whole point:
+-- these are PROPERTIES, not out parameters. A property read goes to memory
+-- owned by the object and hands back first-class UObjects, so the
+-- references may be kept for the four seconds until the next scan.
+-- PalUtility's out-param array lives in the call frame and is gone by the
+-- time the table reaches Lua - keeping what came out of it is what killed
+-- the game in 2.1.5. The rule from the top of this file decides between
+-- them, and it is checked here too rather than assumed.
+-- ---------------------------------------------------------------
+local COLLECTOR_CLASS = "PalObjectCollector"
+local collectorObj = nil
+local collectorState = 0        -- 0 untried, 1 usable, 2 unavailable
+local collectorTries = 0
+local COLLECTOR_MAX_TRIES = 6
+
+local allBuf, humanBuf2, playerBuf2 = {}, {}, {}
+local exclScratch = {}
+
+local function rawProp(o, name) return o[name] end
+
+-- FindAllOf/FindFirstOf hand back the class default object first, and a
+-- CDO's arrays are always empty - the same trap the Esc-menu widget hunt
+-- fell into. Skip anything called Default__*.
+local function isRealInstance(o)
+    if o == nil or not guard.alive(o) then return false end
+    local n = actorName(o)
+    return n == nil or n:sub(1, 9) ~= "Default__"
+end
+
+local function findCollector()
+    local o = guard.get(FindFirstOf, COLLECTOR_CLASS)
+    if isRealInstance(o) then return o end
+    local all = guard.get(FindAllOf, COLLECTOR_CLASS)
+    if type(all) == "table" then
+        for i = 1, #all do
+            if isRealInstance(all[i]) then return all[i] end
+        end
+    end
+    return nil
+end
+
+local function collectorList(obj, prop, out)
+    local v = guard.get(rawProp, obj, prop)
+    local n = toArray(v, out, nil)
+    if n == nil then return nil end
+    if not elementsUsable(out, n, COLLECTOR_CLASS) then return nil end
+    return n
+end
+
+local function scanViaCollector(cfg, px, py, maxD2, playerPawn)
+    local obj = collectorObj
+    if obj == nil or not guard.alive(obj) then return false end
+
+    local nAll = collectorList(obj, "PalCharacter_All", allBuf)
+    if nAll == nil then return false end
+    local nHum = collectorList(obj, "PalCharacter_NPC", humanBuf2) or 0
+    local nPly = collectorList(obj, "PalCharacter_Player", playerBuf2) or 0
+
+    -- Everything that is NOT a pal, by name. Names are unique within a
+    -- level; identity comparison on reflected UObjects is not reliable.
+    local excluded = exclScratch
+    for k in pairs(excluded) do excluded[k] = nil end
+
+    local selfName = playerPawn ~= nil and actorName(playerPawn) or nil
+    if selfName ~= nil then excluded[selfName] = true end
+
+    for i = 1, nPly do
+        local a = playerBuf2[i]
+        local n = actorName(a)
+        if n ~= nil then
+            excluded[n] = true
+            if cfg.showPlayers and n ~= selfName then
+                S.players[#S.players + 1] = a
+            end
+        end
+    end
+    for i = 1, nHum do
+        local n = actorName(humanBuf2[i])
+        if n ~= nil then excluded[n] = true end
+    end
+
+    local skipped, inRange = 0, 0
+    local noLoc, noName, farAway = 0, 0, 0
+    if cfg.showPals then
+        local near, n = gatherNear(allBuf, nAll, px, py, maxD2, excluded, true)
+        inRange = n
+        noLoc, noName, farAway = nearStats.noLoc, nearStats.noName, nearStats.farAway
+        for i = 1, n do
+            local e = near[i]
+            if inWorld(e.actor) then
+                addPal(cfg, e.actor, tribeOf(e.name), playerPawn)
+            else
+                skipped = skipped + 1
+            end
+        end
+        for i = 1, n do near[i].actor = nil end
+    end
+
+    if cfg.showNPCs then
+        local near, n = gatherNear(humanBuf2, nHum, px, py, maxD2, nil, false)
+        local limit = cfg.maxPalIcons
+        for i = 1, n do
+            if i > limit then break end
+            S.npcs[#S.npcs + 1] = near[i].actor
+        end
+        for i = 1, n do near[i].actor = nil end
+    end
+
+    lastMonsterCount = nAll
+    for i = 1, nAll do allBuf[i] = nil end
+    for i = 1, nHum do humanBuf2[i] = nil end
+    for i = 1, nPly do playerBuf2[i] = nil end
+
+    if not reportedScan or (cfg.showPals and #S.pals == 0 and nAll > 0) then
+        reportedScan = true
+        guard.log(string.format(
+            "character scan via PalObjectCollector: %d characters, %d humans, %d players | "
+            .. "of the pals: %d unreadable, %d unnamed, %d out of range, %d in range "
+            .. "-> %d drawn, %d not present in the world",
+            nAll, nHum, nPly, noLoc, noName, farAway, inRange, #S.pals, skipped))
+    end
+    return true
+end
+
 -- The PalUtility path: the game hands us three separate, already-correct
 -- lists, so there is nothing to classify and no object array to walk.
 local function scanViaUtility(cfg, px, py, maxD2, playerPawn, ctx)
@@ -1009,6 +1146,46 @@ function M.scanDynamic(cfg, px, py, zoom, playerPawn)
     wipe(S.pals); wipe(S.players); wipe(S.npcs)
 
     if cfg.showPals or cfg.showNPCs or cfg.showPlayers then
+        -- FIRST CHOICE: the game's own already-classified character lists,
+        -- read as PROPERTIES so the handles are ours to keep. Looked for
+        -- once; the collector is a world object, so a few retries cover a
+        -- probe that lands before the world is up.
+        if collectorState == 0 then
+            collectorTries = collectorTries + 1
+            collectorObj = findCollector()
+            if collectorObj ~= nil then
+                local n = collectorList(collectorObj, "PalCharacter_All", allBuf)
+                if n ~= nil then
+                    collectorState = 1
+                    guard.log(string.format(
+                        "using PalObjectCollector: PalCharacter_All/_NPC/_Player are the "
+                        .. "game's own classified lists, read as properties (%d characters "
+                        .. "right now). No object-array walk, and no guessing which is "
+                        .. "which.", n))
+                else
+                    collectorObj = nil
+                end
+                for i = 1, (n or 0) do allBuf[i] = nil end
+            end
+            if collectorState == 0 and collectorTries >= COLLECTOR_MAX_TRIES then
+                collectorState = 2
+                guard.log("PalObjectCollector is not readable on this build"
+                    .. (badElements[COLLECTOR_CLASS] and " (see above)" or "")
+                    .. "; trying PalUtility next.")
+            end
+        end
+
+        if collectorState == 1 then
+            if scanViaCollector(cfg, px, py, maxD2, playerPawn) then
+                S.lastScan = os.clock()
+                S.version = S.version + 1
+                return
+            end
+            -- it worked once and has stopped: the world probably changed
+            collectorObj = findCollector()
+            if collectorObj == nil then collectorState = 0; collectorTries = 0 end
+        end
+
         -- Probed once, at the first scan that has a world context. The CDO
         -- of a native class exists from process start, so there is nothing
         -- to wait for beyond that; a couple of retries only cover a probe
@@ -1026,7 +1203,7 @@ function M.scanDynamic(cfg, px, py, zoom, playerPawn)
                     guard.log("PalUtility answered, but never returned a single pal monster "
                         .. "over " .. UTIL_MAX_PROBES .. " scans - scanning the object array instead.")
                 end
-            elseif elementsBad then
+            elseif badElements["PalUtility"] then
                 -- not a "maybe next time" failure: it has already said what
                 -- it hands back, and that will not change
                 utilState = 2
@@ -1414,6 +1591,9 @@ function M.forget()
     -- in-progress pass holds actor references from it
     kindCache, kindSeen, rotation = {}, {}, 1
     cursor = nil
+    -- the collector is a world object and dies with its world; look it up
+    -- again rather than reading through a corpse
+    if collectorState == 1 then collectorObj = nil; collectorState = 0; collectorTries = 0 end
     -- Species icons that RESOLVED are kept - the asset still exists. The
     -- ones that did not are re-decided, so a species first met during a
     -- load screen gets another chance instead of being a "human" forever.

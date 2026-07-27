@@ -143,6 +143,33 @@ hatch is `calibrate()`, which reads the live bounds out of the game's own
 iterates the defaults, so the retired `axis` block is ignored on load and gone
 from the file after the next save.
 
+**Added in 2.1.8 — `PalObjectCollector`, the native route that actually works.**
+
+Found by parsing `Palworld.usmap` (the schema dump in `_tools`) rather than by guessing.
+The game keeps its own curated, already-classified character lists:
+
+```
+PalObjectCollector.PalCharacter_All      Array<Object>
+PalObjectCollector.PalCharacter_NPC      Array<Object>
+PalObjectCollector.PalCharacter_Player   Array<Object>
+```
+
+and *pals = All − NPC − Player*. This is now the primary scan.
+
+**Why this one is safe where `PalUtility` was not** — which is the entire point. These are
+**properties**, not out parameters. A property read goes to memory owned by the object and
+hands back first-class `UObject`s, so the references may be kept for the four seconds until
+the next scan. `PalUtility`'s out-param array lives in the call frame and is already gone by
+the time the table reaches Lua; keeping what came out of it is what killed the game in
+2.1.5. The rule from the crash is still enforced here rather than assumed — the elements are
+checked, and if they ever arrive unusable this route is refused too.
+
+What it gets us, all at once: **no object-array walk for characters**, the classification is
+the game's own rather than anything inferred, and party pals stay off the map (the `bHidden`
+/ `IsDead` filter still runs on top). The routes are tried in order —
+`PalObjectCollector`, then `PalUtility` if its elements are first-class, then the engine
+object array — and the log says which one is in use.
+
 **Fixed in 2.1.7 — the crash. 2.1.5 was storing references it had no right to keep.**
 
 The game died with
