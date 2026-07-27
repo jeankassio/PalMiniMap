@@ -118,6 +118,11 @@ local S = {
     staticRebuildAt = 0.0,   -- throttle rebuilds so they do not spike
 }
 
+-- Base camp autohide, declared up here because the static scan below has
+-- to know whether the camp positions are still needed. See updateProximity.
+local campRoute = nil      -- which route answered, logged once when it changes
+local campExact = false    -- the player's own component has answered at least once
+
 -- ---------------------------------------------------------------
 -- reflection helpers
 --
@@ -1372,7 +1377,12 @@ local cursor = nil        -- { spec, all, total, index, list, count, startedAt }
 
 local function wantedKind(cfg, spec)
     if cfg[spec.cfg] == true then return true end
-    if spec.kind == "camp" and cfg.autohideInBase then return true end
+    -- The autohide used to force this scan so it had camp positions to
+    -- measure a radius against. It now asks the player's own component
+    -- instead, so the walk is only needed while that route is unavailable.
+    if spec.kind == "camp" and cfg.autohideInBase and not campExact then
+        return true
+    end
     return false
 end
 
@@ -1444,7 +1454,7 @@ local function rebuildStatic(cfg, px, py, zoom)
             local isCamp = spec.kind == "camp"
             for i = 1, #list do
                 local p = list[i]
-                if isCamp and cfg.autohideInBase then
+                if isCamp and cfg.autohideInBase and not campExact then
                     camps[#camps + 1] = p
                 end
                 if visible then
@@ -1533,10 +1543,102 @@ function M.staticFilling(cfg)
     return false
 end
 
--- Base camp proximity is recomputed from the stored camp positions on
--- every dynamic scan: the camps do not move, but the player does.
-function M.updateProximity(cfg, px, py)
+-- ---------------------------------------------------------------
+-- "is the player inside a base camp?" - for the autohide
+--
+-- ASK THE GAME. It already tracks this exactly, and the answer it keeps
+-- is the base's REAL shape and size:
+--
+--   PalPlayerCharacter
+--     .InsideBaseCampCheckComponent      (PalInsideBaseCampCheckComponent)
+--       .NowInsideBaseCampID             (Guid - valid only while inside)
+--
+-- That is not a guess either: it is exactly what the 1.x blueprint read
+-- (ExecuteUbergraph_ModActor calls IsValid_Guid on that very property to
+-- set its `currentlyInABaseCamp`), which is why the 1.x autohide turned
+-- back off the moment you stepped out of the base.
+--
+-- 2.0-2.2.3 measured a circle around every PalBuildObjectBaseCampPoint
+-- instead, and PalBuildObjectBaseCampPoint carries no radius at all, so
+-- the radius was a made-up constant - 12000 uu, i.e. a 120 m bubble,
+-- several times a real base. That is the "I have to walk very far away
+-- before the minimap comes back" bug: the map hid on time and unhid far
+-- too late.
+--
+-- The circle survives only as a fallback for a UE4SS build that cannot
+-- read the component, and `campRoute` is logged once so the log says
+-- which one is actually in use rather than leaving it a mystery.
+-- ---------------------------------------------------------------
+local function rawCampComponent(pawn) return pawn.InsideBaseCampCheckComponent end
+local function rawCampFlag(comp) return comp:IsInsideBaseCamp() end
+local function rawCampID(comp) return comp.NowInsideBaseCampID end
+local function rawGuidWords(g) return g.A, g.B, g.C, g.D end
+
+local function noteRoute(name)
+    if campRoute == name then return end
+    campRoute = name
+    guard.log("base camp detection: " .. name)
+end
+
+-- FGuid::IsValid() is "any of the four words is non-zero". Returns nil for
+-- "could not read it", which is NOT the same as "not in a base".
+local function guidIsSet(id)
+    local ok, a, b, c, d = pcall(rawGuidWords, id)
+    if ok and type(a) == "number" then
+        return a ~= 0 or b ~= 0 or c ~= 0 or d ~= 0
+    end
+    -- Some UE4SS builds hand a struct back as an opaque value whose only
+    -- readable form is its text. A zero Guid prints as all zeros and
+    -- dashes, so any other hex digit means it is set.
+    local s = guard.get(tostring, id)
+    if type(s) ~= "string" then return nil end
+    local hex = s:match("[%x%-]+")
+    if hex == nil or #hex < 32 then return nil end
+    return hex:match("[1-9a-fA-F]") ~= nil
+end
+
+-- nil = "the game did not answer this tick", not "outside".
+local function insideByComponent(pawn)
+    if pawn == nil then return nil end
+    local comp = guard.get(rawCampComponent, pawn)
+    if not guard.alive(comp) then return nil end
+
+    -- A plain bool, if this build reflects one: cheaper and needs no
+    -- struct reading at all.
+    local flag = asBool(guard.get(rawCampFlag, comp))
+    if flag ~= nil then
+        noteRoute("IsInsideBaseCamp()")
+        return flag
+    end
+
+    local id = guard.get(rawCampID, comp)
+    if id == nil then return nil end
+    local set = guidIsSet(id)
+    if set ~= nil then
+        noteRoute("NowInsideBaseCampID")
+        return set
+    end
+    return nil
+end
+
+-- Called from the movement tick and from the scan tick.
+function M.updateProximity(cfg, px, py, pawn)
     if not cfg.autohideInBase then S.campNear = false; return end
+
+    local exact = insideByComponent(pawn)
+    if exact ~= nil then
+        campExact = true
+        S.campNear = exact
+        return
+    end
+
+    -- No answer this tick - there is no pawn between a death and a
+    -- respawn, for one. If the component has EVER answered, hold the last
+    -- answer instead of letting the coarse fallback take over and flip
+    -- the minimap underneath it.
+    if campExact then return end
+
+    noteRoute("radius fallback (component unreadable)")
     local camps = kindCache.camp or S.camps
     local r2 = cfg.baseCampRadius * cfg.baseCampRadius
     for i = 1, #camps do
@@ -1547,6 +1649,9 @@ function M.updateProximity(cfg, px, py)
     end
     S.campNear = false
 end
+
+-- test hook
+function M.campRoute() return campRoute end
 
 -- test hook: what is actually being kept between ticks, so a harness can
 -- assert that nothing unwrappable ever lands in here

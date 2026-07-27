@@ -1,5 +1,5 @@
 -- =====================================================================
--- PalMiniMap 2.2.3 - a native minimap for Palworld
+-- PalMiniMap 2.2.4 - a native minimap for Palworld
 --
 -- No blueprint, no .pak, no shipped assets. The whole mod is this Lua
 -- script driving UMG through UE4SS reflection, drawing the game's own
@@ -623,6 +623,10 @@ local function movementTick()
     if not render.isBuilt() then return end
     local p = frameState
     if p == nil then return end
+
+    -- the pawn carries the component that knows whether we are in a base
+    sources.updateProximity(cfg, p.x, p.y, p.pawn)
+
     -- hide behind the game's own menus, and while inside a base camp if
     -- the user asked for that
     local hide = gameUiOpen()
@@ -681,7 +685,7 @@ local function scanTick()
 
     -- the player character doubles as the reference for IsFriend
     sources.scanDynamic(cfg, p.x, p.y, zoom, p.pawn)
-    sources.updateProximity(cfg, p.x, p.y)
+    sources.updateProximity(cfg, p.x, p.y, p.pawn)
     staticDue = true
 end
 
@@ -1208,4 +1212,4 @@ guard.register("pump loop", function()
     LoopAsync(PUMP_MS, guard.loopBody("pump", pump, anythingDue))
 end)
 
-guard.log("PalMiniMap 2.2.3 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
+guard.log("PalMiniMap 2.2.4 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")

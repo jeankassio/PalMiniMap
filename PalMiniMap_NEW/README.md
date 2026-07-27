@@ -87,7 +87,7 @@ machinery version 2 no longer has:
 | Autozoom while moving | yes — widens with walk/run/fly speed |
 | Rotation lock (north up) | yes — `rotateWithCamera` |
 | Lock all icon rotations to north | yes — `lockIconsNorth` |
-| Autohide while in base camps | yes — `autohideInBase` |
+| Autohide while in base camps | yes — `autohideInBase`, from the game's own base check (2.2.4) |
 | Hide collected items | yes — `hideCollected` |
 | Show pal positions | yes |
 | Only show shiny pals | yes — via `IsRarePal()` |
@@ -153,6 +153,42 @@ too overflows the icon pool, so the draw loop drops whatever was emitted last
 48 pals in range shows no people at all, since pals are collected first.
 `poolCapacity` sums all three budgets, and `needsRebuild` compares that sum,
 so a new budget key becomes a rebuild key for free.
+
+## "Am I in a base camp?" — ask, don't measure (2.2.4)
+
+The `autohideInBase` option hid the minimap on time but brought it back far
+too late: you had to walk most of a screen away from the base first.
+
+The cause was that 2.0–2.2.3 answered the question itself, by measuring the
+distance to the nearest `PalBuildObjectBaseCampPoint` and comparing it to
+`cfg.baseCampRadius`. **That class carries no radius**, so the number was
+invented — 12000 uu, a 120 m bubble, several times the size of a real base.
+
+The game already tracks this exactly:
+
+```
+PalPlayerCharacter
+  .InsideBaseCampCheckComponent      -- PalInsideBaseCampCheckComponent
+    .NowInsideBaseCampID             -- Guid, valid only while inside
+```
+
+and that is what 1.x read — `ExecuteUbergraph_ModActor` calls `IsValid_Guid`
+on that very property to set its `currentlyInABaseCamp`, which is why the 1.x
+autohide released the moment you stepped out. The component uses the base's
+real bounds, so there is no radius to tune and nothing to get wrong.
+
+`sources.lua` tries, in order: a reflected `IsInsideBaseCamp()` bool if the
+build has one, then the Guid, then the old circle — and **logs which route is
+live**, once, so a build where the component is unreadable says so instead of
+quietly going back to guessing. If the component has ever answered and then
+misses a tick (there is no pawn between a death and a respawn), the last
+answer is held rather than letting the circle flip the minimap underneath it.
+
+Two things fall out for free: `baseCampRadius` is now fallback-only (and
+dropped to 5000, still an estimate — it just no longer matters), and the
+`PalBuildObjectBaseCampPoint` walk is no longer forced by the autohide, so
+turning the base-camp *marker* off now genuinely removes a `FindAllOf` from
+the scan rotation.
 
 ## Why the round minimap is round (2.2.3)
 

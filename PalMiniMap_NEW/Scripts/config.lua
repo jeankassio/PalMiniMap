@@ -71,7 +71,13 @@ local DEFAULTS = {
     logGameUiWidgets   = false,
 
     autohideInBase     = false,   -- 1.x: "autohide minimap while in base camps"
-    baseCampRadius     = 12000,   -- how close counts as "inside a base camp"
+    -- FALLBACK ONLY. "Inside a base" normally comes from the player's own
+    -- PalInsideBaseCampCheckComponent, which is exact; this circle is used
+    -- only if that cannot be read (sources.lua logs which route is live).
+    -- PalBuildObjectBaseCampPoint carries no radius, so this is an
+    -- estimate - the old 12000 was a 120 m bubble and kept the minimap
+    -- hidden long after the player had left.
+    baseCampRadius     = 5000,
 
     hideCollected      = true,    -- 1.x: "hide collected items from minimap"
 
