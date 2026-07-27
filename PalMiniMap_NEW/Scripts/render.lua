@@ -46,7 +46,7 @@ local S = {
     widget = nil, tree = nil,
     frame = nil, frameSlot = nil,
     viewport = nil,
-    backdrop = nil,
+    backdrop = nil, backdropSlot = nil,
     circleOverlay = nil, circleSlot = nil,
     mapImage = nil, mapSlot = nil, mapPx = nil,
     mapTex = nil, mapTexPath = nil,
@@ -258,7 +258,7 @@ function M.destroy()
     end
     S.widget, S.tree = nil, nil
     S.frame, S.frameSlot, S.viewport = nil, nil, nil
-    S.backdrop = nil
+    S.backdrop, S.backdropSlot = nil, nil
     S.mapImage, S.mapSlot, S.mapTex = nil, nil, nil
     S.mapPx, S.mapAngle = nil, nil
     S.bands = nil
@@ -414,7 +414,10 @@ function M.build(pc, cfg)
         S.backdrop = construct("/Script/UMG.Border", S.tree)
         if S.backdrop ~= nil then
             guard.get(function() S.backdrop:SetBrushColor(BACKDROP) end)
-            place(addToCanvas(S.frame, S.backdrop), 0, 0, size, size)
+            -- the slot is kept so applyLayout can follow a size change
+            -- without a rebuild - see the edit-mode note in main.lua
+            S.backdropSlot = addToCanvas(S.frame, S.backdrop)
+            place(S.backdropSlot, 0, 0, size, size)
             setVisible(S.backdrop, true)
         end
         S.mapImage = construct("/Script/UMG.Image", S.tree)
@@ -523,6 +526,7 @@ function M.applyLayout(cfg, viewportW, viewportH)
     if x < 0 then x = 0 elseif x > vw - size then x = vw - size end
     if y < 0 then y = 0 elseif y > vh - size then y = vh - size end
     place(S.frameSlot, x, y, size, size)
+    if S.backdropSlot ~= nil then place(S.backdropSlot, 0, 0, size, size) end
     if S.editSlot ~= nil then place(S.editSlot, 0, 0, size, size) end
     guard.get(function() S.widget:SetRenderOpacity(cfg.opacity) end)
 end

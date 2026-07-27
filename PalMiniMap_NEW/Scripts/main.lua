@@ -1,5 +1,5 @@
 -- =====================================================================
--- PalMiniMap 2.1.4 - a native minimap for Palworld
+-- PalMiniMap 2.1.6 - a native minimap for Palworld
 --
 -- No blueprint, no .pak, no shipped assets. The whole mod is this Lua
 -- script driving UMG through UE4SS reflection, drawing the game's own
@@ -63,16 +63,50 @@
 
 local guard = require("guard")
 
--- Resolve the folder this script lives in, so the settings file sits next
--- to the mod wherever UE4SS was installed.
+-- Where this file lives, so the settings sit next to the mod.
+--
+-- IN GAME THIS USED TO FAIL SILENTLY, and the settings ended up in
+-- Pal/Binaries/ - outside the mod entirely, because `(SCRIPT_DIR or ".")`
+-- fell through to the game's working directory. UE4SS does not always give
+-- the chunk a path for a name, so `debug.getinfo().source` can be a bare
+-- "main.lua" with no directory in it at all.
+--
+-- Every candidate is therefore CHECKED by opening a file that must exist
+-- beside it, rather than trusted. The second candidate is package.path,
+-- which is authoritative for a different reason: require("guard") has
+-- already succeeded by the time anything here runs, so one of its entries
+-- provably points at this folder.
+local function canOpen(p)
+    local ok, f = pcall(io.open, p, "r")
+    if not ok or not f then return false end
+    pcall(function() f:close() end)
+    return true
+end
+
+local function looksLikeOurFolder(dir)
+    return dir ~= nil and dir ~= "" and canOpen(dir .. "/guard.lua")
+end
+
 local function scriptDirectory()
-    if debug == nil or debug.getinfo == nil then return nil end
-    local ok, info = pcall(debug.getinfo, 1, "S")
-    if not ok or type(info) ~= "table" or type(info.source) ~= "string" then return nil end
-    local source = info.source
-    if source:sub(1, 1) == "@" then source = source:sub(2) end
-    source = source:gsub("\\", "/")
-    return source:match("^(.+)/[^/]+$")
+    if debug ~= nil and debug.getinfo ~= nil then
+        local ok, info = pcall(debug.getinfo, 1, "S")
+        if ok and type(info) == "table" and type(info.source) == "string" then
+            local source = info.source
+            if source:sub(1, 1) == "@" then source = source:sub(2) end
+            source = source:gsub("\\", "/")
+            local dir = source:match("^(.+)/[^/]+$")
+            if looksLikeOurFolder(dir) then return dir end
+        end
+    end
+
+    if type(package) == "table" and type(package.path) == "string" then
+        for entry in package.path:gmatch("[^;]+") do
+            local dir = entry:gsub("\\", "/"):match("^(.*)/%?%.lua$")
+            if looksLikeOurFolder(dir) then return dir end
+        end
+    end
+
+    return nil
 end
 
 local SCRIPT_DIR = scriptDirectory()
@@ -97,7 +131,19 @@ if config == nil or worldmap == nil or assets == nil
 end
 
 config.setPath((SCRIPT_DIR or ".") .. "/../minimap_settings.json")
+-- Where the settings landed while scriptDirectory() was returning nil: the
+-- game's working directory, i.e. Pal/Binaries. Read from there once so a
+-- player's existing layout, zoom and toggles survive the fix; the next save
+-- writes to the proper place beside the mod.
+config.setLegacyPaths({
+    "./../minimap_settings.json",
+    "minimap_settings.json",
+})
 local cfg = config.load()
+if SCRIPT_DIR == nil then
+    guard.log("could not work out where this script lives; settings will be read and "
+        .. "written relative to the game's working directory instead of the mod folder")
+end
 
 -- ---------------------------------------------------------------
 -- Deferred settings write
@@ -486,8 +532,35 @@ local function logViewportWidgets()
     guard.log("widgets in viewport (" .. #names .. "): " .. table.concat(names, ", "))
 end
 
+-- ---------------------------------------------------------------
+-- Edit mode (F4)
+--
+-- Declared up here, ahead of the rebuild machinery, because that machinery
+-- has to honour it: WHILE EDIT MODE IS ON, NOTHING REBUILDS.
+--
+-- Dragging the window around and stepping its size is the one time the
+-- player is looking straight at the minimap and changing it continuously,
+-- and it was the one time the mod tore the whole widget down and built ~180
+-- of them again - once per size step, plus once more whenever a maintenance
+-- tick noticed the built size no longer matched. It flickered on every
+-- press. Nothing about a rebuild is needed to place the window: the frame,
+-- the backdrop and the edit highlight are all repositioned by applyLayout,
+-- and the terrain quad is sized from cfg.size on the next draw anyway.
+--
+-- So the rebuild is simply remembered and run once, on the way out of edit
+-- mode. What is genuinely baked in at build time - the circular strips and
+-- the icon pool length - stays as it was until then, which is exactly the
+-- "stays still while I am moving it" the player asked for.
+-- ---------------------------------------------------------------
+local editMode = false
+local rebuildAfterEdit = false
+
 local function ensureWidget()
-    if render.isBuilt() and not render.needsRebuild(cfg) then return true end
+    -- an existing widget is left alone while editing, however stale its
+    -- built geometry has become
+    if render.isBuilt() and (editMode or not render.needsRebuild(cfg)) then
+        return true
+    end
     local pc = playerController()
     if pc == nil then return false end
     if not render.build(pc, cfg) then return false end
@@ -517,6 +590,12 @@ local REBUILD_DELAY = 0.25
 local rebuildAt = nil
 
 local function requestRebuild()
+    -- Deferred wholesale while the player is dragging or resizing: see the
+    -- edit-mode note above. toggleEditMode() picks this up on the way out.
+    if editMode then
+        rebuildAfterEdit = true
+        return
+    end
     if rebuildAt == nil then rebuildAt = os.clock() + REBUILD_DELAY end
 end
 
@@ -644,12 +723,12 @@ end
 -- ---------------------------------------------------------------
 -- Controls
 --
--- Forward declarations: `zoomBy` needs `editMode` and `resize`, which are
--- defined below it. Without these two lines both resolved to globals -
--- i.e. to nil - so +/- in edit mode silently fell through to the zoom
--- path and the window could never be resized.
+-- Forward declaration: `zoomBy` needs `resize`, which is defined below it.
+-- Without this line it resolved to a global - i.e. to nil - so +/- in edit
+-- mode silently fell through to the zoom path and the window could never
+-- be resized. (`editMode` is declared further up, next to the rebuild
+-- machinery that has to honour it.)
 -- ---------------------------------------------------------------
-local editMode = false
 local resize
 
 -- A negative coordinate is a margin measured from the right/bottom edge,
@@ -744,8 +823,19 @@ local function toggleEditMode()
     render.setEditMode(editMode)
     local vw, vh = viewportSize()
     render.applyLayout(cfg, vw, vh)
-    if not editMode then markDirty() end
-    guard.log("edit mode " .. (editMode and "on - arrows move, +/- resize"
+    if not editMode then
+        markDirty()
+        -- Everything the editing session changed is applied in one go now.
+        -- `needsRebuild` is asked as well as the remembered flag, so a size
+        -- that was changed from the F5 window while edit mode happened to be
+        -- on is not left behind either.
+        if rebuildAfterEdit or render.needsRebuild(cfg) then
+            rebuildAfterEdit = false
+            requestRebuild()
+        end
+    end
+    guard.log("edit mode " .. (editMode and "on - arrows move, +/- resize (the minimap "
+                                            .. "stays as it is until you leave)"
                                         or "off - layout saved"))
 end
 
@@ -759,6 +849,12 @@ end
 
 resize = function(delta)
     cfg.size = config.clamp(cfg.size + delta, 120, 480)
+    -- The window follows the new size immediately - applyLayout moves and
+    -- resizes the frame, the backdrop and the edit highlight, and the next
+    -- draw scales the terrain from cfg.size. The rebuild that the circular
+    -- strips and the icon pool need is what waits for F4 to be released.
+    local vw, vh = viewportSize()
+    render.applyLayout(cfg, vw, vh)
     requestRebuild()
     markDirty()
 end
@@ -1104,4 +1200,4 @@ guard.register("pump loop", function()
     LoopAsync(PUMP_MS, guard.loopBody("pump", pump, anythingDue))
 end)
 
-guard.log("PalMiniMap 2.1.4 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
+guard.log("PalMiniMap 2.1.6 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")

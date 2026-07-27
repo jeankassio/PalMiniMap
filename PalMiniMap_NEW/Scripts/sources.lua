@@ -287,6 +287,8 @@ local utilShape = nil   -- which call form worked
 local utilTries, utilProbes = 0, 0
 local UTIL_MAX_TRIES = 3        -- outright failures before giving up
 local UTIL_MAX_PROBES = 40      -- "works but empty" retries, ~2.5 min of scans
+local utilEmpty, UTIL_MAX_EMPTY = 0, 3
+local lastMonsterCount = 0
 
 local monstersBuf, humansBuf, playersBuf = {}, {}, {}
 
@@ -509,10 +511,44 @@ local function utility()
     return utilObj
 end
 
+-- The CONTAINER shape is settled by the probe; the ELEMENT shape is not.
+-- UE4SS can hand back objects directly or wrapped in something that has to
+-- be opened with :get(), and a list of wrappers looks exactly like a list
+-- of dead actors from here - every one fails IsValid and is dropped, which
+-- is "54 monsters -> 0 pals drawn" with nothing else to go on.
+--
+-- Decided once, from the first element, and only when the answer is
+-- POSITIVE either way: if neither form is alive the actor may simply have
+-- just died, so nothing is latched and the next scan asks again.
+local unwrapElements = nil
+
+local function normaliseElements(out, n)
+    if n == nil or n == 0 then return n end
+    if unwrapElements == nil then
+        if guard.alive(out[1]) then
+            unwrapElements = false
+        else
+            local inner = guard.get(rawUnwrap, out[1])
+            if inner ~= nil and guard.alive(inner) then
+                unwrapElements = true
+                guard.log("PalUtility: list elements arrive wrapped - unwrapping with :get()")
+            end
+        end
+    end
+    if unwrapElements then
+        for i = 1, n do
+            local inner = guard.get(rawUnwrap, out[i])
+            if inner ~= nil then out[i] = inner end
+        end
+    end
+    return n
+end
+
 -- Returns the filled buffer and a count, or nil to mean "use FindAllOf".
 local function utilityList(name, ctx, out)
     if utilObj == nil or utilShape == nil then return nil end
-    return (callAndRead(utilShape, utilObj, name, ctx, out, nil))
+    local n = callAndRead(utilShape, utilObj, name, ctx, out, nil)
+    return normaliseElements(out, n)
 end
 
 -- ---------------------------------------------------------------
@@ -725,7 +761,14 @@ end
 -- Collect the in-range subset of `list` into the nearScratch table, in
 -- distance order. Shared by the pal pass and the human pass so both get
 -- the same nearest-first budgeting.
+-- Where the candidates went, so "0 pals drawn" can say WHY. 2.1.4 reported
+-- 54 monsters and nothing drawn, with no way to tell whether the actors
+-- were unreadable, unnamed, or simply far away.
+local nearStats = { noLoc = 0, noName = 0, excluded = 0, farAway = 0 }
+
 local function gatherNear(list, count, px, py, maxD2, excluded, needName)
+    local st = nearStats
+    st.noLoc, st.noName, st.excluded, st.farAway = 0, 0, 0, 0
     local near, n = nearScratch, 0
     for i = 1, count do
         local a = list[i]
@@ -734,13 +777,23 @@ local function gatherNear(list, count, px, py, maxD2, excluded, needName)
         -- level - most of them kilometres away - doubled the reflection
         -- cost of the scan.
         local x, y = actorLocation(a)
-        if x ~= nil then
+        if x == nil then
+            st.noLoc = st.noLoc + 1
+        else
             local d = dist2(x, y, px, py)
-            if d <= maxD2 then
+            if d > maxD2 then
+                st.farAway = st.farAway + 1
+            else
                 local name, keep = nil, true
                 if needName then
                     name = actorName(a)
-                    keep = name ~= nil and not (excluded ~= nil and excluded[name])
+                    if name == nil then
+                        keep = false
+                        st.noName = st.noName + 1
+                    elseif excluded ~= nil and excluded[name] then
+                        keep = false
+                        st.excluded = st.excluded + 1
+                    end
                 end
                 if keep then
                     n = n + 1
@@ -775,6 +828,7 @@ end
 -- lists, so there is nothing to classify and no object array to walk.
 local function scanViaUtility(cfg, px, py, maxD2, playerPawn, ctx)
     local nMon = utilityList("GetPalMonsters", ctx, monstersBuf)
+    lastMonsterCount = nMon or 0
     if nMon == nil then return false end
 
     local nHum = utilityList("GetHumanNPCs", ctx, humansBuf) or 0
@@ -796,9 +850,12 @@ local function scanViaUtility(cfg, px, py, maxD2, playerPawn, ctx)
         end
     end
 
-    local skipped = 0
+    local skipped, inRange = 0, 0
+    local noLoc, noName, farAway = 0, 0, 0
     if cfg.showPals then
         local near, n = gatherNear(monstersBuf, nMon, px, py, maxD2, excluded, true)
+        inRange = n
+        noLoc, noName, farAway = nearStats.noLoc, nearStats.noName, nearStats.farAway
         for i = 1, n do
             local e = near[i]
             if inWorld(e.actor) then
@@ -824,12 +881,15 @@ local function scanViaUtility(cfg, px, py, maxD2, playerPawn, ctx)
     for i = 1, nHum do humansBuf[i] = nil end
     for i = 1, nPly do playersBuf[i] = nil end
 
-    if not reportedScan then
+    -- The FULL funnel, not just the ends. 2.1.4 logged "54 pal monsters ->
+    -- 0 pals drawn" and there was no way to tell which step ate them.
+    if not reportedScan or (cfg.showPals and #S.pals == 0 and nMon > 0) then
         reportedScan = true
         guard.log(string.format(
-            "character scan via PalUtility: %d pal monsters, %d human NPCs, %d players "
-            .. "-> %d pals drawn (%d skipped as not present in the world)",
-            nMon, nHum, nPly, #S.pals, skipped))
+            "character scan via PalUtility: %d monsters, %d humans, %d players | "
+            .. "of the monsters: %d unreadable, %d unnamed, %d out of range, %d in range "
+            .. "-> %d drawn, %d not present in the world",
+            nMon, nHum, nPly, noLoc, noName, farAway, inRange, #S.pals, skipped))
     end
     return true
 end
@@ -952,6 +1012,30 @@ function M.scanDynamic(cfg, px, py, zoom, playerPawn)
         local ok = false
         if utilState == 1 then
             ok = scanViaUtility(cfg, px, py, maxD2, playerPawn, playerPawn) == true
+            -- SELF-CHECKING. A faster scan that draws nothing is worse than
+            -- a slow one that works, and 2.1.4 shipped exactly that: the
+            -- game returned 54 monsters and the minimap stayed empty. So
+            -- when the utility path comes back with no pals at all while
+            -- the game said there ARE monsters, run the old path too and
+            -- compare. If the old path finds pals, the new one is wrong
+            -- about something and loses its turn.
+            if ok and cfg.showPals and #S.pals == 0 and lastMonsterCount > 0 then
+                wipe(S.pals); wipe(S.players); wipe(S.npcs)
+                scanViaFindAll(cfg, px, py, maxD2, playerPawn)
+                if #S.pals > 0 then
+                    ok = true       -- already scanned, do not scan twice
+                    utilEmpty = utilEmpty + 1
+                    if utilEmpty >= UTIL_MAX_EMPTY then
+                        utilState = 2
+                        guard.log(string.format(
+                            "PalUtility returned monsters but produced no pals %d scans "
+                            .. "running, while the object-array scan found some - dropping "
+                            .. "it and using the object-array scan from now on.", utilEmpty))
+                    end
+                end
+            else
+                utilEmpty = 0
+            end
         end
         if not ok then
             scanViaFindAll(cfg, px, py, maxD2, playerPawn)

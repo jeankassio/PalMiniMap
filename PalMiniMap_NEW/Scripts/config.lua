@@ -104,9 +104,14 @@ local DEFAULTS = {
 
 local current = nil
 local path = nil
+local legacyPaths = nil
 
 function M.setPath(p) path = p end
 function M.defaults() return DEFAULTS end
+
+-- Places an older version may have written the file. Read-only: a save
+-- always goes to `path`, so the first save after an upgrade migrates it.
+function M.setLegacyPaths(list) legacyPaths = list end
 
 local function readFileText(p)
     local opened, f = pcall(io.open, p, "r")
@@ -154,17 +159,29 @@ local function merge(stored)
     return out
 end
 
+local function readSettings(p)
+    local text = readFileText(p)
+    if text == nil then return nil end
+    local ok, decoded = pcall(json.decode, text)
+    if ok and type(decoded) == "table" then return decoded end
+    guard.log("settings file '" .. tostring(p) .. "' unreadable, ignoring it: "
+        .. tostring(decoded))
+    return nil
+end
+
 function M.load()
     if current then return current end
-    local stored = nil
-    if path then
-        local text = readFileText(path)
-        if text then
-            local ok, decoded = pcall(json.decode, text)
-            if ok and type(decoded) == "table" then
-                stored = decoded
-            else
-                guard.log("settings file unreadable, using defaults: " .. tostring(decoded))
+    local stored = path and readSettings(path) or nil
+    if stored == nil and legacyPaths ~= nil then
+        for i = 1, #legacyPaths do
+            local p = legacyPaths[i]
+            if p ~= path then
+                stored = readSettings(p)
+                if stored ~= nil then
+                    guard.log("settings found at '" .. p .. "', which is where an older "
+                        .. "version put them; they will be saved beside the mod from now on")
+                    break
+                end
             end
         end
     end

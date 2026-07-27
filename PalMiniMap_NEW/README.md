@@ -143,6 +143,61 @@ hatch is `calibrate()`, which reads the live bounds out of the game's own
 iterates the defaults, so the retired `axis` block is ignored on load and gone
 from the file after the next save.
 
+**Changed in 2.1.6 — edit mode (F4) no longer rebuilds anything.**
+
+Dragging the window around and stepping its size is the one moment the player is looking
+straight at the minimap and changing it continuously — and it was the one moment the mod
+tore the whole widget down and constructed ~180 of them again, once per size step, plus
+again whenever a maintenance tick noticed the built size no longer matched. It flickered on
+every press.
+
+None of that is needed to *place* a window. The frame, the backdrop and the edit highlight
+are all repositioned by `applyLayout`, and the terrain quad is scaled from `cfg.size` on the
+next draw regardless. Only two things are genuinely baked in at build time — the circular
+strips and the icon pool length — and those can simply wait.
+
+So while F4 is on, **every rebuild request is remembered instead of run**, including the one
+`needsRebuild` would otherwise trigger from a maintenance tick, and they all collapse into a
+single rebuild when F4 is pressed again. The window still follows the arrows and `+`/`-`
+immediately; what stays still is everything else. Harness: 0 rebuilds across a 20-press
+resize burst and 60 nudges while F4 is held, exactly 1 on leaving.
+
+**Fixed in 2.1.5 — `PalUtility` engaged, and then drew nothing at all.** The log said:
+
+```
+PalUtility: using /Script/Pal.Default__PalUtility, GetPalMonsters(ctx, out)
+  -> lua table in the out table, 54 monsters
+character scan via PalUtility: 54 pal monsters, 1 human NPCs, 1 players
+  -> 0 pals drawn (0 skipped as not present in the world)
+```
+
+54 monsters in, nothing out, and nothing rejected by the in-world filter — so they were
+lost in between, with no way to tell where. Three changes, in order of how much they
+matter:
+
+* **A faster scan that draws nothing is worse than a slow one that works.** The utility
+  path is now **self-checking**: when it produces no pals at all while the game said there
+  *are* monsters, the old object-array scan runs for that tick and the two are compared. If
+  the old path finds pals, the new one loses its turn — and after three such scans it is
+  dropped for the session and says so. The minimap cannot end up empty because of it again.
+* **List elements can arrive wrapped.** UE4SS hands some values back inside something that
+  has to be opened with `:get()`, and a list of wrappers is indistinguishable from a list of
+  dead actors — every one fails `IsValid` and is silently dropped, which is exactly "54
+  monsters → 0 drawn". The element form is now decided once from the first element, and
+  only ever latched on a positive answer, so an actor that merely happened to die does not
+  settle it.
+* **The log reports the whole funnel, not just the ends**: `of the monsters: N unreadable,
+  N unnamed, N out of range, N in range -> N drawn, N not present in the world`.
+
+**Also fixed: the settings file was being written outside the mod.** It turned up in
+`Pal/Binaries/minimap_settings.json`, because UE4SS does not always give a Lua chunk a
+*path* for a name — `debug.getinfo().source` can be a bare `main.lua` with no directory in
+it — and `(SCRIPT_DIR or ".")` then quietly resolved against the game's working directory.
+Candidates are now **checked** by opening a file that must sit beside them rather than
+trusted, and `package.path` is used as the second candidate because `require("guard")` has
+already proven one of its entries points at this folder. An existing file in the old
+location is still read once, so nobody loses their layout.
+
 **Fixed in 2.1.4 — alpha pals were being drawn as human NPCs, and the `PalUtility`
 call convention, both straight off the in-game log.**
 
