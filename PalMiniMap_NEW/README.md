@@ -154,6 +154,39 @@ too overflows the icon pool, so the draw loop drops whatever was emitted last
 `poolCapacity` sums all three budgets, and `needsRebuild` compares that sum,
 so a new budget key becomes a rebuild key for free.
 
+## Why the round minimap is round (2.2.3)
+
+Slate clips to axis-aligned **rectangles** only, so the disc is built from N
+horizontal clipped strips. That outline is a staircase, and it was visible:
+measured, 24 strips on a 240 px minimap wander **±4 px**.
+
+No strip count fixes it. Optimal (equal-ripple) spacing buys 0.1 px, and
+sub-pixel accuracy would need ~150 strips — and each strip is its own Slate
+clipping zone, so each is one more draw call **every frame**.
+
+So the outline is not made accurate, it is **covered**.
+`icons/T_minimap_frame.png` is a shipped image whose inner edge is a real
+supersampled circle, with an opaque bezel 3.8% of the diameter wide — wider
+than the strips' worst error. It is drawn above the strips and *below* the
+icons, so a marker near the rim is not clipped by the bezel. What the player
+sees as the outline is that inner edge, which is exact at any size.
+
+Two details are load-bearing. The strip disc is built 1.8% **smaller** than
+the widget, because the union of rectangles bulges slightly past the radius it
+approximates and beyond the widget radius is the one place the bezel cannot
+reach. And `bandCount`'s floor is 24, not 16, because below that the staircase
+grows wider than the bezel.
+
+Getting either number wrong is **silent** — it shows as a notch of terrain on
+the rim at some sizes and not others — so `tools/check_frame.py` reproduces
+`buildBands` and measures the margin at every size the menu allows (120–480).
+`--render` draws the result over a checkerboard so it can be looked at.
+
+The frame replaces the game's own `T_prt_map_circle_eff`: two rings on one
+edge is muddy, and stretching that 128 px glow across the whole disc was
+washing the terrain out. If the PNG is missing the disc simply keeps its old
+faceted outline and says so in the log.
+
 ## Why the icons are files (2.2.0)
 
 Up to 2.1.9 every portrait was fetched with `LoadAsset`, and no amount of

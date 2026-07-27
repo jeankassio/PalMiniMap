@@ -35,7 +35,12 @@ local VIS_SHOW, VIS_HIDE = 3, 1
 local CLIP_BOUNDS = 1
 
 local MAP_TEXTURE = "/Game/Pal/Texture/UI/Map/T_WorldMap.T_WorldMap"
-local CIRCLE_TEXTURE = "/Game/Pal/Texture/UI/Map/T_prt_map_circle_eff.T_prt_map_circle_eff"
+-- Not a game asset: a path this mod owns, so assets.lua resolves it to
+-- icons/T_minimap_frame.png and never asks the package loader for it. See
+-- tools/make_frame.py, and tools/check_frame.py for why RIM/INSET are these.
+local FRAME_TEXTURE = "/PalMiniMap/T_minimap_frame.T_minimap_frame"
+local RIM   = 0.038     -- opaque bezel width, fraction of the diameter
+local INSET = 0.018     -- how much smaller the strip disc is than the widget
 local PLAYER_TEXTURE = "/Game/Pal/Texture/UI/InGame/T_icon_map_player.T_icon_map_player"
 -- Duplicated from sources.lua on purpose: this is the marker EVERY icon
 -- falls back to while its own portrait is still queued, so build() loads
@@ -47,7 +52,7 @@ local S = {
     frame = nil, frameSlot = nil,
     viewport = nil,
     backdrop = nil, backdropSlot = nil,
-    circleOverlay = nil, circleSlot = nil,
+    rim = nil, rimSlot = nil,
     mapImage = nil, mapSlot = nil, mapPx = nil,
     mapTex = nil, mapTexPath = nil,
     bands = nil,            -- circular mode: list of clipped strips
@@ -59,7 +64,7 @@ local S = {
     builtSize = nil,
     builtPool = nil,
     builtCircular = nil,
-    circleSize = nil,
+    rimSize = nil,
     mapAngle = nil,
     viewW = nil, viewH = nil,
     editMode = false,
@@ -267,7 +272,7 @@ function M.destroy()
     S.mapImage, S.mapSlot, S.mapTex = nil, nil, nil
     S.mapPx, S.mapAngle = nil, nil
     S.bands = nil
-    S.circleOverlay, S.circleSlot, S.circleSize = nil, nil, nil
+    S.rim, S.rimSlot, S.rimSize = nil, nil, nil
     S.editBorder, S.editSlot = nil, nil
     S.playerIcon, S.playerSlot = nil, nil
     S.playerSize, S.playerAngle = nil, nil
@@ -304,10 +309,20 @@ local BACKDROP = { R = 0.02, G = 0.03, B = 0.05, A = 0.55 }
 -- and bottom of the disc.
 --
 -- Honest about the approximation: the worst radial error is about
--- R * pi / (4n), so the strip count is chosen from the radius to keep that
--- near 3 px (31 strips on a 240 px minimap, 48 on the largest). The
--- outline is a fine staircase rather than a mathematical circle, and the
--- game's own circular overlay is drawn on top of exactly that seam.
+-- R * pi / (4n) - measured, +-4 px on a 240 px minimap with 24 strips. THE
+-- STAIRCASE IS VISIBLE, and 2.2.3 is the admission that no strip count fixes
+-- it: optimal (equal-ripple) spacing buys 0.1 px, and sub-pixel would need
+-- ~150 strips, each of which is a Slate clipping zone and therefore a draw
+-- call EVERY FRAME.
+--
+-- So the outline is not made accurate, it is COVERED. `icons/
+-- T_minimap_frame.png` is a shipped image whose inner edge is a real
+-- supersampled circle and whose opaque bezel (RIM) is wider than the error;
+-- the strips are inset (INSET) so none of them bulges past its outer edge.
+-- What the player sees is the frame's inner edge, which is exact at any
+-- size. `tools/check_frame.py` measures the margin across the whole 120-480
+-- range the menu allows, because getting this wrong is silent - it shows up
+-- as a notch of terrain on the rim at some sizes and not others.
 --
 -- There is no per-strip backdrop: the map texture is opaque, so the dark
 -- backdrop only ever shows outside the map bounds, and in circular mode
@@ -322,22 +337,32 @@ local BACKDROP = { R = 0.02, G = 0.03, B = 0.05, A = 0.55 }
 -- every update. 2.0.7 asked for a ~3 px outline error and got 31 strips;
 -- ~4 px costs 24 and is not tellable apart on a minimap once the game's
 -- circular art is drawn over the seam.
+-- The floor is 24, not 16: below that the staircase gets wider than the
+-- frame's bezel and terrain steps out past it. `tools/check_frame.py`
+-- reproduces this function and measures the margin at every size the menu
+-- allows - change either number there and it will tell you.
 local function bandCount(size)
     local n = math.floor(size * 0.10 + 0.5)
-    if n < 16 then n = 16 elseif n > 36 then n = 36 end
+    if n < 24 then n = 24 elseif n > 36 then n = 36 end
     return n
 end
 
+-- The strips are laid out on a radius slightly SMALLER than the widget
+-- (INSET) while staying centred in it. Without that, a strip corner reaches
+-- past the widget's own radius - the union of rectangles bulges outside the
+-- circle it approximates - and that bulge would sit outside the frame's
+-- bezel, which is the one place nothing can cover it.
 local function buildBands(size)
     local n = bandCount(size)
     local R = size * 0.5
+    local r = R - INSET * size
     S.bands = {}
     for k = 0, n - 1 do
         local t0 = (k / n) * math.pi
         local t1 = ((k + 1) / n) * math.pi
-        local y0 = R - R * math.cos(t0)
-        local y1 = R - R * math.cos(t1)
-        local w = R * math.sin((t0 + t1) * 0.5)
+        local y0 = R - r * math.cos(t0)
+        local y1 = R - r * math.cos(t1)
+        local w = r * math.sin((t0 + t1) * 0.5)
         local h = y1 - y0
         if w > 0.5 and h > 0.5 then
             local panel = construct("/Script/UMG.CanvasPanel", S.tree)
@@ -431,21 +456,40 @@ function M.build(pc, cfg)
         setVisible(S.mapImage, true)
     end
 
-    -- The game's own circular art, drawn over the seam between the strips.
-    -- It is decoration now, not the shape itself.
+    -- THE FRAME IS WHAT MAKES THE CIRCLE A CIRCLE (2.2.3).
+    --
+    -- Until now this slot held the game's own `T_prt_map_circle_eff`, which
+    -- is a soft rim glow: it decorated the seam between the strips but did
+    -- nothing about the staircase underneath, so the outline was visibly
+    -- faceted. `icons/T_minimap_frame.png` is a shipped image whose INNER
+    -- edge is a real, supersampled circle, and it is wide enough (RIM) to sit
+    -- over the whole of the strips' error. What the player sees as the
+    -- outline is that inner edge, so it is exact at any size.
+    --
+    -- It replaces the game's art rather than joining it: two rings on one
+    -- edge is muddy, and stretching a 128 px glow across the whole disc was
+    -- also washing the terrain out.
+    --
+    -- Drawn BELOW the icons (z 5) so a marker near the rim is not clipped by
+    -- the bezel, and above the strips so the staircase is covered.
     if round then
-        S.circleOverlay = construct("/Script/UMG.Image", S.tree)
-        if S.circleOverlay ~= nil then
-            S.circleSlot = addToCanvas(S.viewport, S.circleOverlay)
-            guard.get(function() S.circleSlot:SetZOrder(80) end)
-            local ctex = assets.loadNow(CIRCLE_TEXTURE, false)
+        S.rim = construct("/Script/UMG.Image", S.tree)
+        if S.rim ~= nil then
+            S.rimSlot = addToCanvas(S.viewport, S.rim)
+            guard.get(function() S.rimSlot:SetZOrder(5) end)
+            local ctex = assets.loadNow(FRAME_TEXTURE, false)
             if ctex ~= nil then
-                guard.get(function() S.circleOverlay:SetBrushFromTexture(ctex, false) end)
-                place(S.circleSlot, 0, 0, size, size)
-                S.circleSize = size
-                setVisible(S.circleOverlay, true)
+                guard.get(function() S.rim:SetBrushFromTexture(ctex, false) end)
+                place(S.rimSlot, 0, 0, size, size)
+                S.rimSize = size
+                setVisible(S.rim, true)
             else
-                setVisible(S.circleOverlay, false)
+                -- No frame image: the disc is the bare staircase again, which
+                -- is how it looked before 2.2.3 - worse, not broken.
+                setVisible(S.rim, false)
+                guard.log("icons/T_minimap_frame.png is missing, so the round "
+                    .. "minimap keeps the stepped outline; run "
+                    .. "tools/make_frame.py")
             end
         end
     end
@@ -656,9 +700,9 @@ function M.update(cfg, player, marks, count)
     -- the disc is real geometry now, but icons are still culled to it:
     -- they are drawn in the square frame, not inside the strips
     local round = S.bands ~= nil
-    if S.circleSlot ~= nil and S.circleSize ~= size then
-        S.circleSize = size
-        place(S.circleSlot, 0, 0, size, size)
+    if S.rimSlot ~= nil and S.rimSize ~= size then
+        S.rimSize = size
+        place(S.rimSlot, 0, 0, size, size)
     end
     local radius = half - (cfg.iconSize * 0.35)
     local radius2 = radius * radius
