@@ -143,6 +143,47 @@ hatch is `calibrate()`, which reads the live bounds out of the game's own
 iterates the defaults, so the retired `axis` block is ignored on load and gone
 from the file after the next save.
 
+**Fixed in 2.1.7 — the crash. 2.1.5 was storing references it had no right to keep.**
+
+The game died with
+
+```
+EXCEPTION_ACCESS_VIOLATION reading address 0x0000000400000039
+```
+
+— a garbage pointer, from `Palworld_Win64_Shipping` with no Lua error and nothing in
+`UE4SS.log`, because a native access violation kills the process before anything can be
+written. The cause is one line that had appeared in the log a few seconds earlier:
+
+```
+PalUtility: list elements arrive wrapped - unwrapping with :get()
+```
+
+2.1.5 found that `GetPalMonsters`' elements were not usable objects directly, opened each
+one with `:get()`, and **stored what came out in `S.pals`** — where the draw path
+dereferences it ten times a second for the next four seconds. A wrapper handed back by
+UE4SS points into the memory of the call that produced it. Reading through one later is
+undefined, and no guard in this mod can catch it: `pcall` only sees Lua errors, and
+`IsValid()` on a recycled object slot can answer yes.
+
+So there is now a second crash-safety rule beside the one this mod was built on:
+
+> **An actor reference may only be kept if it arrived as a first-class `UObject`. Never
+> store the result of unwrapping something.**
+
+If the list elements do not arrive usable, the whole list path is refused and the
+object-array scan takes over — slower, and it has never crashed. `PalUtility::IsDead` is
+still used, because it takes an actor we already own and hands back a boolean: nothing
+crosses back that has to outlive the call. **On this build that means the `PalUtility`
+scan is off and the object-array scan is doing the work.** The 2.1.2 walking-stutter fix,
+the 2.1.4 alpha-pal fix and the party-pal filter are all unaffected — none of them depend
+on it.
+
+The other place 2.1.2 started keeping actor references between ticks — the resumable static
+scan — is tightened rather than removed: 48 actors per step instead of 24 (a 480-actor class
+clears in one second), and a pass that has not finished within three seconds is abandoned
+instead of carried further.
+
 **Changed in 2.1.6 — edit mode (F4) no longer rebuilds anything.**
 
 Dragging the window around and stepping its size is the one moment the player is looking

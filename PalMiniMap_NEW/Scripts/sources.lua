@@ -22,6 +22,24 @@
 -- itself, never a walk to an attach parent or owner, which is where both
 -- 1.x crashes actually happened.
 --
+-- 2.1.7 ADDS A SECOND RULE, PAID FOR WITH A CRASH:
+--
+--   AN ACTOR REFERENCE MAY ONLY BE KEPT IF IT ARRIVED AS A FIRST-CLASS
+--   UObject. Never store the result of unwrapping something.
+--
+-- 2.1.5 read PalUtility's monster list, found its elements were not usable
+-- objects directly, opened each one with :get() and stored what came out
+-- in S.pals - where it is dereferenced ten times a second for the next
+-- four seconds. Palworld died with
+--     EXCEPTION_ACCESS_VIOLATION reading address 0x0000000400000039
+-- which is a garbage pointer, and no Lua guard can catch that: pcall only
+-- sees Lua errors, and IsValid() on a recycled object slot can answer yes.
+-- A wrapper handed back by UE4SS points into the memory of the call that
+-- produced it; reading through it later is undefined, and "later" here was
+-- every frame for four seconds.
+--
+-- So the wrapped case is no longer used at all. See utilityList().
+--
 -- COST: every FindAllOf is a full walk of the UObject array, and Palworld
 -- keeps a lot of objects. 2.0.5 did fourteen of those walks every four
 -- seconds, which is the frame-time spike people described as "stutter
@@ -452,6 +470,39 @@ local function callAndRead(shape, util, name, ctx, out, describe)
     return nil, nil
 end
 
+-- THE ELEMENTS MUST BE FIRST-CLASS OBJECTS, or this whole path is refused.
+--
+-- 2.1.5 saw that the elements were not usable directly, opened each with
+-- :get() and stored the results. That is what killed the game - see the
+-- crash-safety note at the top of this file. A wrapper points into the
+-- memory of the call that produced it, S.pals keeps its contents for four
+-- seconds, and the draw path reads through them ten times a second.
+--
+-- Reading such a wrapper immediately, inside the same call, would be
+-- defensible. Storing what comes out of it is not, and the actors are
+-- needed for exactly that: their position, every frame. So there is no
+-- clever middle course here. If the elements do not arrive usable, the
+-- object-array scan is used instead - slower, and it has never crashed.
+local elementsBad = false
+
+local function elementsUsable(out, n)
+    if n == nil or n == 0 then return true end
+    if guard.alive(out[1]) then return true end
+    if not elementsBad then
+        elementsBad = true
+        -- say plainly what was rejected and why, so this is never quietly
+        -- "fixed" by unwrapping again
+        local inner = guard.get(rawUnwrap, out[1])
+        local wrapped = inner ~= nil and guard.alive(inner)
+        guard.log("PalUtility: its list elements are "
+            .. (wrapped and "WRAPPED values, not objects that may be kept"
+                        or "not usable objects")
+            .. " - refusing to store them (2.1.5 did, and the game died with an access "
+            .. "violation four seconds later). Using the object-array scan instead.")
+    end
+    return false
+end
+
 -- Returns "ok" once a call shape has been proven, "empty" when a shape
 -- worked but the level currently has no monsters in it, or false when
 -- nothing worked.
@@ -485,6 +536,13 @@ local function probeUtility(ctx, verbose)
                     where ~= nil and ("raised: " .. where)
                         or ("gave nothing readable (" .. tostring(describe[1]) .. ")")))
             end
+        elseif n > 0 and not elementsUsable(monstersBuf, n) then
+            -- The call works; what it hands back is not something we may
+            -- keep, so the LISTS are refused. IsDead is kept: it takes an
+            -- actor we already own and returns a boolean, so nothing
+            -- crosses back that has to outlive the call.
+            utilObj = obj
+            return false
         elseif n > 0 then
             utilObj, utilShape = obj, shape
             guard.log(string.format(
@@ -506,49 +564,19 @@ local function probeUtility(ctx, verbose)
     return false
 end
 
+-- The object itself, for the calls that hand nothing back that has to
+-- outlive them (IsDead). Available even when the LIST calls were refused -
+-- utilityList gates on utilShape, not on this.
 local function utility()
-    if utilState ~= 1 then return nil end
     return utilObj
-end
-
--- The CONTAINER shape is settled by the probe; the ELEMENT shape is not.
--- UE4SS can hand back objects directly or wrapped in something that has to
--- be opened with :get(), and a list of wrappers looks exactly like a list
--- of dead actors from here - every one fails IsValid and is dropped, which
--- is "54 monsters -> 0 pals drawn" with nothing else to go on.
---
--- Decided once, from the first element, and only when the answer is
--- POSITIVE either way: if neither form is alive the actor may simply have
--- just died, so nothing is latched and the next scan asks again.
-local unwrapElements = nil
-
-local function normaliseElements(out, n)
-    if n == nil or n == 0 then return n end
-    if unwrapElements == nil then
-        if guard.alive(out[1]) then
-            unwrapElements = false
-        else
-            local inner = guard.get(rawUnwrap, out[1])
-            if inner ~= nil and guard.alive(inner) then
-                unwrapElements = true
-                guard.log("PalUtility: list elements arrive wrapped - unwrapping with :get()")
-            end
-        end
-    end
-    if unwrapElements then
-        for i = 1, n do
-            local inner = guard.get(rawUnwrap, out[i])
-            if inner ~= nil then out[i] = inner end
-        end
-    end
-    return n
 end
 
 -- Returns the filled buffer and a count, or nil to mean "use FindAllOf".
 local function utilityList(name, ctx, out)
     if utilObj == nil or utilShape == nil then return nil end
     local n = callAndRead(utilShape, utilObj, name, ctx, out, nil)
-    return normaliseElements(out, n)
+    if not elementsUsable(out, n) then return nil end
+    return n
 end
 
 -- ---------------------------------------------------------------
@@ -961,8 +989,8 @@ local function scanViaFindAll(cfg, px, py, maxD2, playerPawn)
     if not reportedScan and palCount > 0 then
         reportedScan = true
         guard.log(string.format(
-            "character scan via FindAllOf: %d PalCharacters, %d players excluded, "
-            .. "%d in range -> %d pals, %d humans",
+            "character scan via the engine object array: %d PalCharacters, %d players "
+            .. "excluded, %d in range -> %d pals, %d humans",
             palCount, nPlayers, n, nPals, nHumans))
     end
     if not reportedNoIcon and iconFormatWorks and noIconCount > 0 then
@@ -998,6 +1026,10 @@ function M.scanDynamic(cfg, px, py, zoom, playerPawn)
                     guard.log("PalUtility answered, but never returned a single pal monster "
                         .. "over " .. UTIL_MAX_PROBES .. " scans - scanning the object array instead.")
                 end
+            elseif elementsBad then
+                -- not a "maybe next time" failure: it has already said what
+                -- it hands back, and that will not change
+                utilState = 2
             else
                 utilTries = utilTries + 1
                 if utilTries >= UTIL_MAX_TRIES then
@@ -1086,10 +1118,20 @@ local kindCache = {}      -- kind -> { x, y, ... }  positions only
 local kindSeen = {}       -- kind -> true once scanned at least once
 local rotation = 1
 
-local ACTORS_PER_STEP = 24
+local ACTORS_PER_STEP = 48
 
--- in-progress pass over one class, or nil between kinds
-local cursor = nil        -- { spec, all, total, index, list, count }
+-- In-progress pass over one class, or nil between kinds.
+--
+-- THIS HOLDS ACTOR REFERENCES BETWEEN TICKS, which the rest of this file
+-- is careful never to do, so it is deliberately kept short-lived: 48 per
+-- step at 10 Hz clears a 480-actor class in one second, and a pass that
+-- somehow has not finished within CURSOR_MAX_AGE is abandoned rather than
+-- carried any further. `actorLocation` validates before it reads, so an
+-- actor destroyed mid-pass is skipped - but validation is not proof (a
+-- recycled object slot can answer yes), and the crash that cost 2.1.5
+-- came from exactly that family of mistake. Keep the window small.
+local CURSOR_MAX_AGE = 3.0
+local cursor = nil        -- { spec, all, total, index, list, count, startedAt }
 
 local function wantedKind(cfg, spec)
     if cfg[spec.cfg] == true then return true end
@@ -1102,6 +1144,7 @@ local function beginKind(spec)
     cursor = {
         spec = spec, all = all, total = #all, index = 0,
         list = {}, count = 0,       -- built aside, swapped in when complete
+        startedAt = os.clock(),
     }
 end
 
@@ -1109,6 +1152,12 @@ end
 -- when the kind is finished and its cache has been replaced.
 local function stepKind(cfg)
     local c = cursor
+    -- stale pass: the references in it are older than we are willing to
+    -- dereference. Drop it; the kind comes round again on its own.
+    if (os.clock() - c.startedAt) > CURSOR_MAX_AGE then
+        cursor = nil
+        return false
+    end
     local spec = c.spec
     local list, count = c.list, c.count
     local all = c.all
@@ -1260,6 +1309,14 @@ function M.updateProximity(cfg, px, py)
         end
     end
     S.campNear = false
+end
+
+-- test hook: what is actually being kept between ticks, so a harness can
+-- assert that nothing unwrappable ever lands in here
+function M.debugPalActors()
+    local out = {}
+    for i = 1, #S.pals do out[i] = S.pals[i].actor end
+    return out
 end
 
 function M.insideBaseCamp() return S.campNear end
