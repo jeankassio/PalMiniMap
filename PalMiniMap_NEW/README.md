@@ -154,6 +154,44 @@ too overflows the icon pool, so the draw loop drops whatever was emitted last
 `poolCapacity` sums all three budgets, and `needsRebuild` compares that sum,
 so a new budget key becomes a rebuild key for free.
 
+## Hiding behind the game's own screens (2.2.5)
+
+The minimap must not draw on top of the Esc menu, the inventory, an open
+chest, the palbox, the world map or a shop. Three attempts got this wrong:
+
+| version | signal | why it failed |
+|---|---|---|
+| 2.0.2 | `pc.bShowMouseCursor` | **Palworld leaves the cursor on during ordinary gameplay** — the minimap was hidden permanently |
+| 2.0.4 | `WBP_InGameMainMenu_C` in the viewport | a guessed class name |
+| 2.2.4 | same class, bugs fixed | the name was real but it is the *inventory* screen, not the Esc menu (`WBP_MenuESC_Pause`) — and naming screens one at a time can never cover "anything the game opens": there are 112 of them |
+
+2.2.5 tests the **base classes** those screens derive from, read out of the
+widget blueprints in `Pal-Windows.pak`:
+
+- **`PalUserWidgetOverlayUI`** — carries `EscInputHandle` / `TabInputHandle` /
+  `CancelInputHandle`, i.e. "a screen that swallows Esc and Tab".
+  `WBP_MenuESC_Pause`, `WBP_InGameMainMenu`, `WBP_ItemChest`, `WBP_Map_Base`,
+  `WBP_ItemShop` and ~107 others.
+- **`PalUserWidgetStackableUI`** — the stacked-window base (it owns the open
+  and close sounds), used by the palbox and sub-windows that aren't overlays.
+
+`FindAllOf` matches subclasses — the same property the pal scan relies on — so
+those two names cover every screen at once, and keep covering the ones a future
+game update adds.
+
+**Failure is deliberately made safe.** If some always-on widget turned out to
+derive from one of these, the minimap would hide forever — the 2.0.2 disaster
+again. So a class is *armed* only once it has been seen with none of its
+instances in the viewport: until a probe has proved it can read "nothing open",
+it never reports "open". A bad class costs that one signal, not the minimap,
+and logs why.
+
+Cost is bounded the way the rest of the mod is: the viewport test runs at 5 Hz
+(not per movement tick), tracks at most 64 instances per class, and tops the
+instance list up with one `FindAllOf` per class every 5 s — *topping up* rather
+than replacing, because a screen opened for the first time this session is a
+widget that did not exist at the previous scan.
+
 ## "Am I in a base camp?" — ask, don't measure (2.2.4)
 
 The `autohideInBase` option hid the minimap on time but brought it back far

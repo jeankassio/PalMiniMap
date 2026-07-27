@@ -1,5 +1,5 @@
 -- =====================================================================
--- PalMiniMap 2.2.4 - a native minimap for Palworld
+-- PalMiniMap 2.2.5 - a native minimap for Palworld
 --
 -- No blueprint, no .pak, no shipped assets. The whole mod is this Lua
 -- script driving UMG through UE4SS reflection, drawing the game's own
@@ -124,8 +124,9 @@ local assets   = needModule("assets")
 local render   = needModule("render")
 local sources  = needModule("sources")
 local menu     = needModule("menu")
+local gameui   = needModule("gameui")
 if config == nil or worldmap == nil or assets == nil
-   or render == nil or sources == nil or menu == nil then
+   or render == nil or sources == nil or menu == nil or gameui == nil then
     guard.log("PalMiniMap is disabled for this session (missing module above).")
     do return end
 end
@@ -213,11 +214,9 @@ local function rawVelocity(pawn)
     local v = pawn:GetVelocity()
     return v.X, v.Y, v.Z
 end
-local function rawIsPaused(gs, pc) return gs:IsGamePaused(pc) end
 local function rawInViewport(w) return w:IsInViewport() end
 local function rawWorldName(pc) return pc:GetWorld():GetFName():ToString() end
 local function rawClassName(o) return o:GetClass():GetFName():ToString() end
-local function rawObjectName(o) return o:GetFName():ToString() end
 
 -- The LOCAL controller specifically. On a co-op host the object array
 -- holds a PlayerController per connected player, and taking whichever
@@ -408,114 +407,14 @@ local function viewportOrDefault()
     return w or 1920, h or 1080
 end
 
--- True while the game is showing its own pause/system menu.
---
--- HISTORY, because two attempts at this have already gone wrong. 2.0.2
--- inferred it from pc.bShowMouseCursor, which Palworld leaves ON during
--- ordinary gameplay, so the minimap was hidden permanently. 2.0.4
--- replaced that with "is WBP_InGameMainMenu_C in the viewport" - but that
--- class name was a guess, and it does not fire.
---
--- The primary signal is now UGameplayStatics::IsGamePaused, which is not
--- a guess about asset names at all: opening the Esc menu (and the map and
--- inventory screens) pauses a solo game, and the call is one cached
--- reflection hop, cheap enough for the movement tick.
---
--- The widget test is kept as a second opinion, because a co-op session
--- does not pause. It is searched for on every maintenance tick while it
--- has never been found - a menu widget that only exists while the menu is
--- open would be missed entirely by a long back-off - and the search stops
--- once found or after a couple of minutes of never finding it.
--- WHY IT NEVER FIRED. The class name was right all along - the v1
--- blueprint imports /Game/Pal/Blueprint/UI/InGameMainMenu/WBP_InGameMainMenu
--- and tests exactly this class. The bug was on our side, twice over:
---
---   1. FindAllOf also returns the CLASS DEFAULT OBJECT,
---      Default__WBP_InGameMainMenu_C. That is the first thing it hands
---      back, we cached it, and a CDO is never in the viewport - so the
---      test answered "menu closed" forever. Names beginning with
---      "Default__" are skipped now.
---   2. Caching ONE instance is wrong anyway: the game may build a fresh
---      menu widget each time it is opened, and the cached one then stays
---      alive but permanently out of the viewport. All live instances are
---      kept and any one of them being in the viewport counts.
---
--- The instance list is re-collected only when every entry has died, so
--- the steady-state cost is one IsInViewport call per instance.
-local GAME_MENU_CLASS = "WBP_InGameMainMenu_C"
-local GAME_MENU_TRIES = 60
-local GAME_MENU_SLOW  = 30.0
-local GAME_MENU_RETRY = 0.25
-local gameMenuWidgets = {}
-local gameMenuTries = 0
-local gameMenuRetryAt = 0.0
-
--- The widgets die with their world, so the list and the search back-off
--- are both reset on a transition. (Three places used to assign to a
--- `gameMenuWidget` that no longer exists - a silent write to a global,
--- which cleared nothing at all.)
-local function forgetGameMenu()
-    for i = #gameMenuWidgets, 1, -1 do gameMenuWidgets[i] = nil end
-    gameMenuTries = 0
-    gameMenuRetryAt = 0.0
-end
-
-local function anyMenuWidgetAlive()
-    for i = 1, #gameMenuWidgets do
-        if guard.alive(gameMenuWidgets[i]) then return true end
-    end
-    return false
-end
-
-local function refreshGameMenuWidget()
-    if not cfg.hideBehindGameUi then return end
-    if anyMenuWidgetAlive() then return end
-
-    local now = os.clock()
-    if now < gameMenuRetryAt then return end
-
-    for i = #gameMenuWidgets, 1, -1 do gameMenuWidgets[i] = nil end
-    gameMenuTries = gameMenuTries + 1
-    gameMenuRetryAt = now + ((gameMenuTries >= GAME_MENU_TRIES) and GAME_MENU_SLOW or GAME_MENU_RETRY)
-
-    local found = guard.get(FindAllOf, GAME_MENU_CLASS)
-    if type(found) ~= "table" then return end
-    for i = 1, #found do
-        local w = found[i]
-        if guard.alive(w) then
-            local n = guard.get(rawObjectName, w)
-            n = n and tostring(n) or ""
-            if n:sub(1, 9) ~= "Default__" then
-                gameMenuWidgets[#gameMenuWidgets + 1] = w
-            end
-        end
-    end
-    if #gameMenuWidgets > 0 then
-        gameMenuRetryAt = 0.0
-    end
-end
-
-local function gamePaused()
-    local gs = statics()
-    local pc = playerController()
-    if gs == nil or pc == nil then return false end
-    return guard.get(rawIsPaused, gs, pc) == true
-end
-
+-- Whether the game has one of its own screens up lives in gameui.lua -
+-- see the three failed attempts documented there.
 local function gameUiOpen()
-    if not cfg.hideBehindGameUi then return false end
     if menu.isOpen() then return false end   -- our own window may stay up
-    if gamePaused() then return true end
-
-    refreshGameMenuWidget()
-    for i = 1, #gameMenuWidgets do
-        local w = gameMenuWidgets[i]
-        if guard.alive(w) and guard.get(rawInViewport, w) == true then
-            return true
-        end
-    end
-    return false
+    return gameui.isOpen(cfg, statics(), playerController())
 end
+
+local function forgetGameMenu() gameui.forget() end
 
 -- Diagnostic for exactly the problem above: with this on, every
 -- maintenance tick lists the widget classes currently in the viewport, so
@@ -727,7 +626,6 @@ local function maintenanceTick()
     if NON_GAME_WORLDS[name] then return end
 
     watchTeleport(frameState)
-    refreshGameMenuWidget()
     ensureWidget()
     worldmap.calibrate()
 end
@@ -1212,4 +1110,4 @@ guard.register("pump loop", function()
     LoopAsync(PUMP_MS, guard.loopBody("pump", pump, anythingDue))
 end)
 
-guard.log("PalMiniMap 2.2.4 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
+guard.log("PalMiniMap 2.2.5 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
