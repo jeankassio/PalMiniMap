@@ -154,43 +154,70 @@ too overflows the icon pool, so the draw loop drops whatever was emitted last
 `poolCapacity` sums all three budgets, and `needsRebuild` compares that sum,
 so a new budget key becomes a rebuild key for free.
 
-## Hiding behind the game's own screens (2.2.5)
+## Hiding behind the game's own screens (2.2.11)
 
-The minimap must not draw on top of the Esc menu, the inventory, an open
-chest, the palbox, the world map or a shop. Three attempts got this wrong:
+Seven attempts. This is the first one built on **measurement** instead of on
+reasoning about the game. `Scripts/uiprobe.lua` is a diagnostic inside the mod
+(enabled by `logGameUiWidgets`) that logs every candidate signal whenever any
+of them changes. One session with a chest, the Tab inventory and the Esc menu
+produced this:
 
-| version | signal | why it failed |
+| | at rest / walking | screen open |
 |---|---|---|
-| 2.0.2 | `pc.bShowMouseCursor` | **Palworld leaves the cursor on during ordinary gameplay** — the minimap was hidden permanently |
-| 2.0.4 | `WBP_InGameMainMenu_C` in the viewport | a guessed class name |
-| 2.2.4 | same class, bugs fixed | the name was real but it is the *inventory* screen, not the Esc menu (`WBP_MenuESC_Pause`) — and naming screens one at a time can never cover "anything the game opens": there are 112 of them |
+| `PalHUDInGame.StackableUIWidgets` | **1** | 2 (Esc later 3) |
+| CommonUI containers | `Layer_0[1] Layer_1[1]` | `+ Layer_2[1]` |
+| `IsGamePaused` | false | **false** — Palworld does not pause |
+| `IsInViewport` on every widget | false | **false** |
+| `bShowMouseCursor` | flips | flips |
 
-2.2.5 tests the **base classes** those screens derive from, read out of the
-widget blueprints in `Pal-Windows.pak`:
+**The resting stack is 1, not 0.** Versions 2.2.7 and 2.2.8 read the right
+array and then tested `count > 0` — true with nothing open. The signal
+therefore never once read "closed", the safety rule correctly refused to trust
+it, and the minimap never hid. The array was never the bug; the assumption
+that an idle stack is empty was.
 
-- **`PalUserWidgetOverlayUI`** — carries `EscInputHandle` / `TabInputHandle` /
-  `CancelInputHandle`, i.e. "a screen that swallows Esc and Tab".
-  `WBP_MenuESC_Pause`, `WBP_InGameMainMenu`, `WBP_ItemChest`, `WBP_Map_Base`,
-  `WBP_ItemShop` and ~107 others.
-- **`PalUserWidgetStackableUI`** — the stacked-window base (it owns the open
-  and close sounds), used by the palbox and sub-windows that aren't overlays.
+Nothing hard-codes 1 either — it could be 2 on the next patch. The baseline is
+**learned**, from the one moment it is certain that nothing is open:
 
-`FindAllOf` matches subclasses — the same property the pal scan relies on — so
-those two names cover every screen at once, and keep covering the ones a future
-game update adds.
+> **A screen cannot be open while the character is running.**
 
-**Failure is deliberately made safe.** If some always-on widget turned out to
-derive from one of these, the minimap would hide forever — the 2.0.2 disaster
-again. So a class is *armed* only once it has been seen with none of its
-instances in the viewport: until a probe has proved it can read "nothing open",
-it never reports "open". A bad class costs that one signal, not the minimap,
-and logs why.
+While the player is moving, whatever the stack reads *is* the baseline (adopted
+after two consecutive identical readings, so one odd frame can't set it).
+Standing still, anything above the baseline is a screen. Movement is measured
+from **position**, not `GetVelocity()` — 2.2.7 used velocity and on this build
+that call fails, leaving it 0.0 forever so nothing depending on it could fire.
 
-Cost is bounded the way the rest of the mod is: the viewport test runs at 5 Hz
-(not per movement tick), tracks at most 64 instances per class, and tops the
-instance list up with one `FindAllOf` per class every 5 s — *topping up* rather
-than replacing, because a screen opened for the first time this session is a
-widget that did not exist at the previous scan.
+This also makes the whole thing self-healing: a baseline learned wrong is
+corrected by walking a few metres, instead of the mod being stuck for the rest
+of the session. And until it has been calibrated, it never hides — three of the
+seven attempts blacked the minimap out for a whole session, which looks like a
+broken mod and is far worse than drawing over a menu.
+
+The count is read through every TArray shape UE4SS might return
+(`GetArrayNum`, `#`, `ForEach`); 2.2.7 tried only the first, failed, and
+silently fell through to widget-guessing.
+
+### Dead ends, confirmed by the probe rather than argued
+
+- `pc.bShowMouseCursor` — on during ordinary gameplay (2.0.2 hid the minimap
+  permanently).
+- `IsGamePaused` — **false with the Esc menu open**.
+- `IsMoveInputIgnored` — false throughout.
+- `IsInViewport()` — false for every widget even with a screen up; Palworld
+  builds its screens as *children* of its UI layout.
+- `UWidget::IsVisible()` on the modal base classes — reads a widget's own flag
+  and ignores its parent layer being collapsed (2.2.6 hid the minimap
+  permanently).
+- Naming screens one at a time — there are 112, and `WBP_InGameMainMenu_C` is
+  the *inventory*; the Esc menu is `WBP_MenuESC_C`.
+
+> The diagnostic itself once crashed the game: it read `DisplayedWidget` and
+> called `GetClass():GetFName():ToString()` on it, three dereferences deep into
+> a widget still being built behind a loading screen. No Lua error — the log
+> just stops, because a native access violation is not something `pcall` can
+> catch. **The 2.1.7 rule applies to debug code too:** touch only what came
+> back from `FindAllOf`, and gate anything that walks the object array on a
+> settled world.
 
 ## "Am I in a base camp?" — ask, don't measure (2.2.4)
 

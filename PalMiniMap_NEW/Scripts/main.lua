@@ -1,5 +1,5 @@
 -- =====================================================================
--- PalMiniMap 2.2.5 - a native minimap for Palworld
+-- PalMiniMap 2.2.11 - a native minimap for Palworld
 --
 -- No blueprint, no .pak, no shipped assets. The whole mod is this Lua
 -- script driving UMG through UE4SS reflection, drawing the game's own
@@ -125,8 +125,10 @@ local render   = needModule("render")
 local sources  = needModule("sources")
 local menu     = needModule("menu")
 local gameui   = needModule("gameui")
+local uiprobe  = needModule("uiprobe")
 if config == nil or worldmap == nil or assets == nil
-   or render == nil or sources == nil or menu == nil or gameui == nil then
+   or render == nil or sources == nil or menu == nil or gameui == nil
+   or uiprobe == nil then
     guard.log("PalMiniMap is disabled for this session (missing module above).")
     do return end
 end
@@ -408,13 +410,20 @@ local function viewportOrDefault()
 end
 
 -- Whether the game has one of its own screens up lives in gameui.lua -
--- see the three failed attempts documented there.
-local function gameUiOpen()
+-- see the five failed attempts documented there.
+--
+-- The player POSITION is handed over so gameui can notice a signal that
+-- has got stuck: nobody walks twenty metres with a chest open. It is
+-- position and not the speed 2.2.7 passed, because speed comes from
+-- GetVelocity() and on a build where that reflection call fails it stays
+-- 0.0 forever - which is exactly why 2.2.7's watchdog never fired and the
+-- minimap stayed hidden for the whole session.
+local function gameUiOpen(px, py)
     if menu.isOpen() then return false end   -- our own window may stay up
-    return gameui.isOpen(cfg, statics(), playerController())
+    return gameui.isOpen(cfg, statics(), playerController(), px, py)
 end
 
-local function forgetGameMenu() gameui.forget() end
+local function forgetGameMenu() gameui.forget(); uiprobe.forget() end
 
 -- Diagnostic for exactly the problem above: with this on, every
 -- maintenance tick lists the widget classes currently in the viewport, so
@@ -423,6 +432,7 @@ local function forgetGameMenu() gameui.forget() end
 -- every widget for its class name.
 local function logViewportWidgets()
     if not cfg.logGameUiWidgets then return end
+    guard.log("game UI state:\n" .. gameui.describe(playerController()))
     local found = guard.get(FindAllOf, "UserWidget")
     if type(found) ~= "table" then return end
     local names, seen = {}, {}
@@ -523,12 +533,20 @@ local function movementTick()
     local p = frameState
     if p == nil then return end
 
+    -- Diagnostic, off unless the user turned it on in the F5 menu. The
+    -- `ready` flag is not optional: its first version ran behind a loading
+    -- screen, walked the object array and dereferenced a half-built
+    -- widget, and Palworld died with no Lua error at all. Same gate the
+    -- actor scans use, because it is the same hazard.
+    uiprobe.tick(cfg, statics(), playerController(),
+                 settled() and not NON_GAME_WORLDS[worldName])
+
     -- the pawn carries the component that knows whether we are in a base
     sources.updateProximity(cfg, p.x, p.y, p.pawn)
 
     -- hide behind the game's own menus, and while inside a base camp if
     -- the user asked for that
-    local hide = gameUiOpen()
+    local hide = gameUiOpen(p.x, p.y)
                  or (cfg.autohideInBase and sources.insideBaseCamp())
     if hide == render.isVisible() then
         render.setVisible(not hide)
@@ -1110,4 +1128,4 @@ guard.register("pump loop", function()
     LoopAsync(PUMP_MS, guard.loopBody("pump", pump, anythingDue))
 end)
 
-guard.log("PalMiniMap 2.2.5 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
+guard.log("PalMiniMap 2.2.11 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
