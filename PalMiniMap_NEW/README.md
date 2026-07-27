@@ -130,6 +130,30 @@ Pal species come from the actor name (`BP_<Tribe>_C_<id>` → `<Tribe>`),
 which is exactly how the blueprint looked up its icon table, and the tribe
 maps straight onto `/Game/Pal/Texture/PalIcon/Normal/T_<Tribe>_icon_normal`.
 
+**Human NPCs do not follow that convention (2.2.2).** The tribe
+`BOSS_Hunter_Rifle` uses `T_BOSS_NPC_Hunter`, `BOSS_Ninja` uses
+`T_BOSS_NPC_Male_Ninja`, `BOSS_Scientist_LaserRifle` uses
+`T_BOSS_NPC_Male_Scientist` — there is no rule to derive, so it is read out of
+the game's own `DT_PalCharacterIconDataTable` and generated into
+`Scripts/npcicons.lua`. Guessing from the names would have got several wrong
+in a way that only ever looks like the wrong face on the map.
+
+That lookup is deliberately kept **apart from `speciesIcon`**, which is what
+decides pal-versus-human in the first place (a tribe whose species icon exists
+*is* a pal). Teaching it about human portraits would make every human answer
+"yes, I am a pal" — the 2.0.8 regression, humans eating the pal budget. The
+NPC table is consulted only for actors already classified as human, and anyone
+not in it keeps the generic marker, which is right: villagers and merchants
+have no portrait in the game either.
+
+Humans also get an icon budget of their own, `maxNpcIcons` (default 24). Both
+alternatives were tried first and are worse: letting them take `maxPalIcons`
+too overflows the icon pool, so the draw loop drops whatever was emitted last
+— always the NPCs, silently; and *sharing* `maxPalIcons` means anywhere with
+48 pals in range shows no people at all, since pals are collected first.
+`poolCapacity` sums all three budgets, and `needsRebuild` compares that sum,
+so a new budget key becomes a rebuild key for free.
+
 ## Why the icons are files (2.2.0)
 
 Up to 2.1.9 every portrait was fetched with `LoadAsset`, and no amount of

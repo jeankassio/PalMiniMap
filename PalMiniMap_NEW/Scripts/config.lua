@@ -100,6 +100,13 @@ local DEFAULTS = {
 
     maxPalIcons        = 48,
     maxPoiIcons        = 48,
+    -- Humans get a budget of their OWN rather than sharing the pal one.
+    -- Sharing meant a pal-dense area showed no people at all, and the
+    -- alternative - letting both take maxPalIcons - overflows the icon pool
+    -- (it is sized from these three) so render dropped whatever was emitted
+    -- last, always the NPCs, without saying so. Smaller than the pal budget
+    -- because a crowd of villagers is scenery, not information.
+    maxNpcIcons        = 24,
 }
 
 local current = nil

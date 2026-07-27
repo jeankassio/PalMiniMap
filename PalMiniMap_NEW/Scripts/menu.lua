@@ -89,6 +89,7 @@ local LAYOUT = {
     { header = "People" },
     { key = "showPlayers",       label = "Show other players",       kind = "bool" },
     { key = "showNPCs",          label = "Show NPC humans",          kind = "bool" },
+    { key = "maxNpcIcons",       label = "Max NPC icons",            kind = "int", min = 0, max = 64 },
     { key = "showDeaths",        label = "Show death locations",     kind = "bool" },
 
     { header = "Items" },

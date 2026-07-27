@@ -40,13 +40,18 @@ marca e pulado, entao chamar isto depois de todo extract_icons.py e barato e
 nao empilha disco sobre disco. `--force` reprocessa assim mesmo.
 
 USO
-    python tools/round_icons.py             # icons/*_icon_normal.png
+    python tools/round_icons.py             # todos os retratos
     python tools/round_icons.py --all       # inclui compasso e artes de mapa
     python tools/round_icons.py --force     # ignora a marca
 
 Os icones de compasso ficam de fora por padrao: sao simbolos que ja vem com
 fundo transparente e ocupam o quadrado inteiro, entao o medalhao so cortaria
 pedaco deles.
+
+Retrato aqui e Pal E humano. Os retratos de NPC (`T_BOSS_NPC_*`, `T_NPC_*`)
+nao terminam em `_icon_normal` - o jogo nao usa essa convencao para humano -
+entao precisam de padrao proprio, senao ficariam quadrados no meio de
+medalhoes.
 
 Requer Pillow.
 """
@@ -134,10 +139,13 @@ def round_icon(path: Path, cache: dict, force: bool) -> bool:
     return True
 
 
+PORTRAITS = ("*_icon_normal.png", "T_BOSS_NPC_*.png", "T_NPC_*.png")
+
+
 def main(argv: list[str]) -> int:
-    pattern = "*.png" if "--all" in argv else "*_icon_normal.png"
+    patterns = ("*.png",) if "--all" in argv else PORTRAITS
     force = "--force" in argv
-    files = sorted(ICONS.glob(pattern))
+    files = sorted({path for pattern in patterns for path in ICONS.glob(pattern)})
     if not files:
         print(f"nenhum PNG em {ICONS}")
         return 1

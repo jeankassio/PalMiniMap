@@ -243,8 +243,13 @@ function M.effectiveZoom(cfg, speed)
     return zoom
 end
 
+-- Every mark kind that has a budget must be counted here, or the pool is too
+-- small and the draw loop silently drops whatever came last. This doubles as
+-- the rebuild trigger: needsRebuild compares the capacity, so a new budget
+-- key becomes a rebuild key for free.
 local function poolCapacity(cfg)
     return (cfg.maxPalIcons or 48) + (cfg.maxPoiIcons or 48)
+         + (cfg.maxNpcIcons or 24)
 end
 
 -- ---------------------------------------------------------------

@@ -70,10 +70,26 @@ PAK = Path(r"G:/SteamLibrary/steamapps/common/Palworld/Pal/Content/Paks/Pal-Wind
 # nenhum.
 WANTED = (
     re.compile(r"^Pal/Content/Pal/Texture/PalIcon/Normal/T_[^/]+_icon_normal$"),
+    # Yakushima vive numa SUBPASTA, mas o nome do objeto segue a mesma
+    # convencao - entao gravado achatado em icons/ ele passa a ser encontrado
+    # pelo caminho que o mod ja montava. Sao 11 especies que ate agora
+    # apareciam como seta e eram classificadas como humano.
+    re.compile(r"^Pal/Content/Pal/Texture/PalIcon/Normal/Yakushima/T_[^/]+_icon_normal$"),
+    # Retratos de NPC humano. O nome NAO segue a convencao (a tribo
+    # BOSS_Hunter_Rifle usa T_BOSS_NPC_Hunter), por isso a tabela do jogo e
+    # decodificada abaixo para Scripts/npcicons.lua.
+    re.compile(r"^Pal/Content/Pal/Texture/PalIcon/NPC/T_[^/]+$"),
     re.compile(r"^Pal/Content/Pal/Texture/UI/InGame/T_icon_(compass|map)_[^/]+$"),
     re.compile(r"^Pal/Content/Pal/Texture/UI/InGame/T_prt_map_[^/]+$"),
     re.compile(r"^Pal/Content/Pal/Texture/UI/Map/T_prt_map_circle_eff$"),
 )
+
+# Fora de proposito:
+#   PalIcon/SKin/*  - nenhuma linha da DT_PalCharacterIconDataTable aponta
+#                     para essa pasta, entao nao ha tribo que chegue nelas.
+#   T_Male_Scholar01_v02_Icon_normal, T_dummy_icon - um humano avulso e um
+#                     placeholder; o primeiro, com esse nome, faria o probe
+#                     de sources.lua classificar um humano como Pal.
 
 # PF_* -> (FourCC do DDS, bytes por bloco, pixels por bloco no eixo)
 FORMATS = {
@@ -101,7 +117,10 @@ PORTRAIT_MAX = 64
 
 
 def is_portrait(stem: str) -> bool:
-    return stem.endswith("_icon_normal")
+    """Retrato de personagem: Pal ou humano. Sao os que o minimapa desenha
+    entre 10 e 40 px. Os simbolos de compasso nao entram - aqueles sao
+    desenhados como vieram."""
+    return "/PalIcon/" in stem
 
 
 def pak_entries() -> list[str]:
@@ -234,6 +253,99 @@ def convert(stem: str, dest: Path) -> str | None:
     return None
 
 
+# ---------------------------------------------------------------------
+# A tabela de icones de NPC
+#
+# Para Pal a convencao basta: a tribo `Alpaca` usa `T_Alpaca_icon_normal`, e
+# sources.lua monta esse caminho sozinho. Para humano ela NAO vale --
+# `BOSS_Hunter_Rifle` usa `T_BOSS_NPC_Hunter`, `BOSS_Ninja` usa
+# `T_BOSS_NPC_Male_Ninja`, `BOSS_Scientist_LaserRifle` usa
+# `T_BOSS_NPC_Male_Scientist`. Nao da para derivar; tem de ser lido.
+#
+# A fonte e `DT_PalCharacterIconDataTable`, a tabela do proprio jogo. O
+# UAssetGUI devolve o export CRU (nao resolve o CompositeDataTable), mas o
+# usmap diz que `PalCharacterIconDataRow` tem uma unica propriedade, `Icon`
+# (SoftObject), e isso fixa o registro em 30 bytes:
+#
+#     FName RowName | 2 bytes de cabecalho unversioned |
+#     FName PackageName | FName AssetName | int32 SubPathString (sempre 0)
+#
+# O inicio das linhas e achado exigindo `start + NumRows*30 == len(dados)`,
+# que so bate no lugar certo - nada aqui e chutado, e um erro de leitura nao
+# passa silencioso.
+# ---------------------------------------------------------------------
+ICON_TABLE = "Pal/Content/Pal/DataTable/Character/DT_PalCharacterIconDataTable"
+UASSETGUI = Path(r"d:/mods_palworld/_tools/UAssetGUI.exe")
+USMAP = Path(r"d:/mods_palworld/_tools/Palworld.usmap")
+NPC_LUA = ROOT / "Scripts" / "npcicons.lua"
+ROW_SIZE = 30
+
+
+def icon_table_rows() -> dict[str, tuple[str, str]]:
+    """{row key: (package, object name)} da tabela de icones do jogo."""
+    import base64
+    import json
+
+    unpack([ICON_TABLE])
+    src = BUILD / "extract" / Path(ICON_TABLE.replace("/", os.sep) + ".uasset")
+    dst = BUILD / "json" / "DT_PalCharacterIconDataTable.json"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run([str(UASSETGUI), "tojson", str(src), str(dst),
+                    "VER_UE5_1", str(USMAP)], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    document = json.loads(dst.read_text(encoding="utf-8"))
+    names = document["NameMap"]
+    data = base64.b64decode(document["Exports"][0]["Data"])
+
+    for start in range(8, 64, 2):
+        count = struct.unpack_from("<i", data, start - 4)[0]
+        if count > 0 and start + count * ROW_SIZE == len(data):
+            break
+    else:
+        raise RuntimeError("nao achei o inicio das linhas em "
+                           "DT_PalCharacterIconDataTable")
+
+    rows: dict[str, tuple[str, str]] = {}
+    for index in range(count):
+        offset = start + index * ROW_SIZE
+        key_index, key_number = struct.unpack_from("<ii", data, offset)
+        package_index = struct.unpack_from("<i", data, offset + 10)[0]
+        object_index = struct.unpack_from("<i", data, offset + 18)[0]
+        sub_path = struct.unpack_from("<i", data, offset + 26)[0]
+        if sub_path != 0:
+            raise RuntimeError("FSoftObjectPath com SubPathString - o layout "
+                               "de 30 bytes nao vale mais")
+        key = names[key_index]
+        if key_number:
+            key += f"_{key_number - 1}"
+        rows[key] = (names[package_index], names[object_index])
+    return rows
+
+
+def write_npc_table(rows: dict[str, tuple[str, str]]) -> int:
+    npc = {key: obj for key, (package, obj) in rows.items()
+           if "/PalIcon/NPC/" in package}
+    lines = [
+        "-- GERADO POR tools/extract_icons.py - NAO EDITE A MAO.",
+        "--",
+        "-- Tribo de NPC humano -> nome do objeto da textura, lido da",
+        "-- DT_PalCharacterIconDataTable do jogo. Existe porque, ao contrario",
+        "-- dos Pals, o nome do icone de um humano NAO sai da tribo:",
+        "-- BOSS_Hunter_Rifle usa T_BOSS_NPC_Hunter.",
+        "--",
+        "-- Quem nao esta aqui fica com o marcador generico, que e o certo:",
+        "-- aldeoes e mercadores nao tem retrato proprio no jogo.",
+        "",
+        "return {",
+    ]
+    for key in sorted(npc):
+        lines.append(f'    ["{key}"] = "{npc[key]}",')
+    lines.append("}")
+    NPC_LUA.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return len(npc)
+
+
 def main() -> int:
     if not REPAK.exists():
         print(f"repak.exe nao encontrado em {REPAK}")
@@ -242,15 +354,15 @@ def main() -> int:
         print(f"pak nao encontrado em {PAK}")
         return 1
 
-    print("[1/3] lendo o indice do pak")
+    print("[1/4] lendo o indice do pak")
     stems = pak_entries()
     print(f"  {len(stems)} texturas correspondem ao que os Scripts pedem")
 
-    print(f"[2/3] desempacotando {len(stems)} texturas")
+    print(f"[2/4] desempacotando {len(stems)} texturas")
     unpack(stems)
 
     force = "--force" in sys.argv
-    print("[3/3] convertendo para PNG" + (" (--force: REGRAVANDO TUDO)" if force else ""))
+    print("[3/4] convertendo para PNG" + (" (--force: REGRAVANDO TUDO)" if force else ""))
     ICONS_OUT.mkdir(parents=True, exist_ok=True)
     failures: dict[str, str] = {}
     written = skipped = total = 0
@@ -273,6 +385,10 @@ def main() -> int:
           f"({total / 1024 / 1024:.1f} MB)")
     if skipped:
         print(f"  {skipped} preservados (ja existiam) - use --force para regravar")
+
+    print("[4/4] tabela de icones de NPC")
+    npc_count = write_npc_table(icon_table_rows())
+    print(f"  {npc_count} tribos de NPC em {NPC_LUA.relative_to(ROOT)}")
     if failures:
         print(f"  {len(failures)} falharam:")
         for name, reason in list(failures.items())[:10]:

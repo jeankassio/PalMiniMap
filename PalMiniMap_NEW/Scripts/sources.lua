@@ -827,6 +827,80 @@ local function gatherNear(list, count, px, py, maxD2, excluded, needName)
     return near, n
 end
 
+-- ---------------------------------------------------------------
+-- Human NPC portraits (2.2.2)
+--
+-- Pals get their icon by CONVENTION: the tribe `Alpaca` uses
+-- `T_Alpaca_icon_normal`, and `speciesIcon` builds that path itself. HUMANS
+-- DO NOT WORK THAT WAY. The tribe `BOSS_Hunter_Rifle` uses
+-- `T_BOSS_NPC_Hunter`; `BOSS_Ninja` uses `T_BOSS_NPC_Male_Ninja`;
+-- `BOSS_Scientist_LaserRifle` uses `T_BOSS_NPC_Male_Scientist`. There is no
+-- rule to derive - the game keeps the pairing in
+-- `DT_PalCharacterIconDataTable`, and `tools/extract_icons.py` decodes that
+-- table into `Scripts/npcicons.lua`. Guessing from the names would have got
+-- several of these wrong, silently, in a way that only looks like the wrong
+-- face on the map.
+--
+-- WHY THIS IS A SEPARATE LOOKUP AND NOT PART OF `speciesIcon`: speciesIcon is
+-- what decides pal-versus-human in the first place - a tribe whose species
+-- icon EXISTS is a pal. Teaching it about human portraits would make every
+-- human answer "yes, I am a pal", which is precisely the 2.0.8 regression:
+-- humans back in the pal list, eating the icon budget so real pals fall off
+-- the end. So the two never meet. This table is consulted ONLY for actors the
+-- classifier has already called human.
+--
+-- Anyone not in the table keeps the generic marker, which is correct rather
+-- than a gap: villagers and merchants have no portrait in the game either.
+-- ---------------------------------------------------------------
+local NPC_IN = "/Game/Pal/Texture/PalIcon/NPC/"
+local NPC_ICON = (function()
+    local ok, t = pcall(require, "npcicons")
+    if ok and type(t) == "table" then return t end
+    guard.log("npcicons.lua could not be loaded; human NPCs will all use the "
+        .. "generic marker (run tools/extract_icons.py to regenerate it)")
+    return {}
+end)()
+
+-- tribe -> full asset path, or false for "no portrait". Resolved once and
+-- kept, for the same reason addPal resolves its path at scan time: building
+-- it per NPC per frame is throwaway strings on the draw path.
+local npcPathFor = {}
+
+local function npcIcon(tribe)
+    if tribe == nil then return nil end
+    local known = npcPathFor[tribe]
+    if known ~= nil then return known or nil end
+    local name = NPC_ICON[tribe]
+    if name == nil then
+        npcPathFor[tribe] = false
+        return nil
+    end
+    local path = NPC_IN .. name .. "." .. name
+    npcPathFor[tribe] = path
+    return path
+end
+
+-- HUMANS HAVE A BUDGET OF THEIR OWN (`maxNpcIcons`), and the icon pool is
+-- sized from it. The two obvious alternatives are both worse, and 2.2.2 tried
+-- them in this order:
+--
+--   * letting NPCs take `maxPalIcons` too overflows the pool, and the draw
+--     loop then drops whatever was emitted last - always the NPCs, silently.
+--     That was already happening before they had portraits; nobody noticed
+--     because every human wore the same generic marker.
+--   * making them SHARE `maxPalIcons` is worse still: pals are collected
+--     first, so anywhere with 48 pals in range showed no people at all.
+--
+-- A separate budget is the only one of the three where "show NPC humans"
+-- means what it says. It defaults smaller than the pal budget because a
+-- crowd of villagers is scenery, not information.
+--
+-- The list is filled in distance order, so this keeps the nearest.
+local function addNPC(cfg, actor, name)
+    if #S.npcs >= (cfg.maxNpcIcons or 24) then return end
+    S.npcs[#S.npcs + 1] = { actor = actor, icon = npcIcon(tribeOf(name)) }
+end
+
 local function addPal(cfg, actor, tribe, playerPawn)
     if #S.pals >= cfg.maxPalIcons then return end
     local shiny = isShiny(actor)
@@ -954,12 +1028,12 @@ local function scanViaCollector(cfg, px, py, maxD2, playerPawn)
     end
 
     if cfg.showNPCs then
-        local near, n = gatherNear(humanBuf2, nHum, px, py, maxD2, nil, false)
-        local limit = cfg.maxPalIcons
-        for i = 1, n do
-            if i > limit then break end
-            S.npcs[#S.npcs + 1] = near[i].actor
-        end
+        -- needName is true now: the portrait lookup is by tribe, and the
+        -- tribe comes out of the actor name. One extra reflection read per
+        -- NEARBY human, which is a handful - the distance test has already
+        -- thrown away everything across the level.
+        local near, n = gatherNear(humanBuf2, nHum, px, py, maxD2, nil, true)
+        for i = 1, n do addNPC(cfg, near[i].actor, near[i].name) end
         for i = 1, n do near[i].actor = nil end
     end
 
@@ -1023,12 +1097,8 @@ local function scanViaUtility(cfg, px, py, maxD2, playerPawn, ctx)
     end
 
     if cfg.showNPCs then
-        local near, n = gatherNear(humansBuf, nHum, px, py, maxD2, excluded, false)
-        local limit = cfg.maxPalIcons
-        for i = 1, n do
-            if i > limit then break end
-            S.npcs[#S.npcs + 1] = near[i].actor
-        end
+        local near, n = gatherNear(humansBuf, nHum, px, py, maxD2, excluded, true)
+        for i = 1, n do addNPC(cfg, near[i].actor, near[i].name) end
         for i = 1, n do near[i].actor = nil end
     end
 
@@ -1107,7 +1177,7 @@ local function scanViaFindAll(cfg, px, py, maxD2, playerPawn)
             end
         else
             nHumans = nHumans + 1
-            if cfg.showNPCs then S.npcs[#S.npcs + 1] = e.actor end
+            if cfg.showNPCs then addNPC(cfg, e.actor, e.name) end
         end
     end
 
@@ -1560,9 +1630,15 @@ function M.collect(cfg, px, py, zoom)
     end
 
     for i = 1, #S.npcs do
-        local x, y = actorLocation(S.npcs[i])
+        local e = S.npcs[i]
+        local x, y = actorLocation(e.actor)
         if x ~= nil then
-            n = emit(n, x, y, ICON.member, isz, TINT.npc, nil, false)
+            -- A portrait is already full colour, so it is drawn as it is; the
+            -- beige tint is for the generic marker, which is a silhouette and
+            -- needs the colour to say "person" rather than "pal".
+            local tex, tint = ICON.member, TINT.npc
+            if e.icon then tex, tint = e.icon, WHITE end
+            n = emit(n, x, y, tex, isz, tint, ICON.member, false)
         end
     end
 
