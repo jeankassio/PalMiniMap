@@ -27,9 +27,10 @@
 -- seconds, which is the frame-time spike people described as "stutter
 -- every few seconds". The scan is now split:
 --   * scanDynamic  - pals, players, NPCs. They move, so 4 s (configurable).
---   * scanStatic   - chests, dungeons, fast travel... They do not move, so
---                    it runs on a 15 s floor and whenever the player has
---                    actually travelled somewhere new (see main.lua).
+--   * stepStatic   - chests, dungeons, fast travel... They do not move, so
+--                    one class comes round per scan interval, and each
+--                    class is walked a BOUNDED number of actors per
+--                    movement tick rather than all at once (see main.lua).
 -- =====================================================================
 
 local guard = require("guard")
@@ -234,6 +235,112 @@ end
 M.STATIC_PAD = 15000
 
 -- ---------------------------------------------------------------
+-- PalUtility - the game answers these questions itself
+--
+-- WHERE THIS CAME FROM: the 1.x blueprint's import table (the same source
+-- as the class list at the top of this file). It never called
+-- GetAllActorsOfClass for characters at all. It called
+--
+--   /Script/Pal.PalUtility::GetPalMonsters(WorldContext, out TArray)
+--   /Script/Pal.PalUtility::GetHumanNPCs(WorldContext, out TArray)
+--   /Script/Pal.PalUtility::GetAllPlayerCharacters(WorldContext, out TArray)
+--
+-- which is why 1.x scanned more cheaply than 2.x did. Three things follow
+-- from using them, and all three are wins:
+--
+--   1. NO UObject-ARRAY WALK. `FindAllOf` walks every UObject in the
+--      process; these return a list the game already maintains. That walk,
+--      twice per scan tick, was the largest single cost in the mod.
+--   2. PAL vs HUMAN IS NO LONGER A GUESS. 2.0.6 subtracted a class and
+--      erased every pal; 2.0.8 stopped and drew humans as pals; 2.1.0
+--      inferred it from whether a species icon asset existed. The game
+--      simply says which is which. The species icon is now only used to
+--      pick the picture, never to decide what something is.
+--   3. IT IS WORLD-SCOPED. `FindAllOf("PalCharacter")` returns every
+--      PalCharacter object in the process, including ones that are not
+--      standing in the level - which is why party pals were showing up on
+--      the minimap while sitting in the player's team.
+--
+-- Everything here is best-effort: if PalUtility is missing or its calls do
+-- not come back in a shape we can read, the FindAllOf path below is used
+-- exactly as before, and which one is in use is logged once.
+-- ---------------------------------------------------------------
+local UTIL_PATH = "/Script/Pal.Default__PalUtility"
+local utilObj = nil
+local utilState = 0     -- 0 untried, 1 usable, 2 unavailable
+local utilTries = 0
+local UTIL_MAX_TRIES = 6
+
+local monstersBuf, humansBuf, playersBuf = {}, {}, {}
+
+local function rawUtilCall(util, name, ctx) return util[name](util, ctx) end
+local function rawArrayNum(arr) return arr:GetArrayNum() end
+local function rawArrayAt(arr, i) return arr:GetArrayElement(i) end
+local function rawForEach(arr, fn) arr:ForEach(fn) end
+
+-- Fill `out` from whatever shape UE4SS hands back for a TArray out
+-- parameter. Builds differ: some give a plain Lua table, some a TArray
+-- userdata with GetArrayNum/GetArrayElement, some only ForEach. Returns
+-- the count, or nil if the value is not a list at all.
+local forEachOut, forEachCount = nil, 0
+
+local function forEachCollect(_, elem)
+    if elem ~= nil then
+        forEachCount = forEachCount + 1
+        forEachOut[forEachCount] = elem
+    end
+end
+
+local function toArray(v, out)
+    if v == nil then return nil end
+
+    if type(v) == "table" then
+        local n = #v
+        for i = 1, n do out[i] = v[i] end
+        for i = #out, n + 1, -1 do out[i] = nil end
+        return n
+    end
+
+    local n = guard.get(rawArrayNum, v)
+    if type(n) == "number" and n >= 0 then
+        local count = 0
+        for i = 1, n do
+            local e = guard.get(rawArrayAt, v, i)
+            if e ~= nil then count = count + 1; out[count] = e end
+        end
+        for i = #out, count + 1, -1 do out[i] = nil end
+        return count
+    end
+
+    forEachOut, forEachCount = out, 0
+    local ok = guard.get(rawForEach, v, forEachCollect)
+    forEachOut = nil
+    if ok == nil and forEachCount == 0 then return nil end
+    for i = #out, forEachCount + 1, -1 do out[i] = nil end
+    return forEachCount
+end
+
+local function utility()
+    if utilState == 2 then return nil end
+    if utilObj ~= nil and guard.alive(utilObj) then return utilObj end
+    utilObj = guard.get(StaticFindObject, UTIL_PATH)
+    if utilObj == nil or not guard.alive(utilObj) then
+        utilObj = nil
+        return nil
+    end
+    return utilObj
+end
+
+-- Returns the filled buffer and a count, or nil to mean "use FindAllOf".
+local function utilityList(name, ctx, out)
+    if ctx == nil then return nil end
+    local util = utility()
+    if util == nil then return nil end
+    local v = guard.get(rawUtilCall, util, name, ctx)
+    return toArray(v, out)
+end
+
+-- ---------------------------------------------------------------
 -- dynamic scan: pals, players, NPCs
 -- ---------------------------------------------------------------
 local nearScratch = {}
@@ -347,13 +454,174 @@ local function addExcluded(excluded, actor)
     return n
 end
 
-function M.scanDynamic(cfg, px, py, zoom, playerPawn)
-    local maxD2 = keepRadius2(zoom)
+-- ---------------------------------------------------------------
+-- "Is this pal actually standing in the world?"
+--
+-- THE BUG THIS EXISTS FOR: pals sitting in the player's TEAM were being
+-- drawn on the minimap even though they were not out in the world. A pal
+-- in a sphere still has an actor - the game keeps it around rather than
+-- destroying and respawning it every time you throw one - it is simply
+-- hidden and not participating in the level.
+--
+-- Two guarded reads, in cost order, and NEITHER may filter on a build that
+-- does not expose it: an unreadable property means "no opinion", never
+-- "hide it". Getting that backwards is how 2.0.6 emptied the minimap.
+--   * bHidden      - the engine's own "this actor is not being rendered".
+--   * PalUtility::IsDead - what 1.x used; a caught or knocked-out pal
+--     lingers for a moment before the game removes it, and 1.x had a
+--     whole setting ("delay remove dead/caught pals") about that window.
+-- ---------------------------------------------------------------
+local function rawHidden(actor) return actor.bHidden end
+local function rawIsDead(util, actor) return util:IsDead(actor) end
 
-    wipe(S.pals); wipe(S.players); wipe(S.npcs)
+local hiddenReadable, deadReadable = nil, nil
 
-    local wantCharacters = cfg.showPals or cfg.showNPCs
-    local rawPals = wantCharacters and findAll("PalCharacter", "characters") or EMPTY
+local function inWorld(actor)
+    if hiddenReadable ~= false then
+        local ok, v = pcall(rawHidden, actor)
+        if ok then
+            hiddenReadable = true
+            if asBool(v) == true then return false end
+        elseif hiddenReadable == nil then
+            hiddenReadable = false
+        end
+    end
+
+    if deadReadable ~= false then
+        local util = utility()
+        if util == nil then
+            deadReadable = false
+        else
+            local ok, v = pcall(rawIsDead, util, actor)
+            if ok then
+                deadReadable = true
+                if asBool(v) == true then return false end
+            elseif deadReadable == nil then
+                deadReadable = false
+            end
+        end
+    end
+
+    return true
+end
+
+-- Collect the in-range subset of `list` into the nearScratch table, in
+-- distance order. Shared by the pal pass and the human pass so both get
+-- the same nearest-first budgeting.
+local function gatherNear(list, count, px, py, maxD2, excluded, needName)
+    local near, n = nearScratch, 0
+    for i = 1, count do
+        local a = list[i]
+        -- Distance FIRST. The name is only needed for the exclusion set
+        -- and the species lookup, and reading it for every actor in the
+        -- level - most of them kilometres away - doubled the reflection
+        -- cost of the scan.
+        local x, y = actorLocation(a)
+        if x ~= nil then
+            local d = dist2(x, y, px, py)
+            if d <= maxD2 then
+                local name, keep = nil, true
+                if needName then
+                    name = actorName(a)
+                    keep = name ~= nil and not (excluded ~= nil and excluded[name])
+                end
+                if keep then
+                    n = n + 1
+                    local slot = near[n]
+                    if slot == nil then slot = {}; near[n] = slot end
+                    slot.actor, slot.name, slot.d = a, name, d
+                end
+            end
+        end
+    end
+    for i = #near, n + 1, -1 do near[i] = nil end
+    table.sort(near, byDistance)
+    return near, n
+end
+
+local function addPal(cfg, actor, tribe, playerPawn)
+    if #S.pals >= cfg.maxPalIcons then return end
+    local shiny = isShiny(actor)
+    if cfg.onlyShinyPals and not shiny then return end
+    local icon = speciesIcon(tribe)
+    S.pals[#S.pals + 1] = {
+        actor = actor,
+        -- resolved ONCE, at scan time. collect() used to string.format
+        -- this path for every pal on every frame - 480 throwaway strings
+        -- a second at the default settings.
+        icon = (type(icon) == "string") and icon or nil,
+        shiny = shiny, friend = isFriend(actor, playerPawn),
+    }
+end
+
+-- The PalUtility path: the game hands us three separate, already-correct
+-- lists, so there is nothing to classify and no object array to walk.
+local function scanViaUtility(cfg, px, py, maxD2, playerPawn, ctx)
+    local nMon = utilityList("GetPalMonsters", ctx, monstersBuf)
+    if nMon == nil then return false end
+
+    local nHum = utilityList("GetHumanNPCs", ctx, humansBuf) or 0
+    local nPly = utilityList("GetAllPlayerCharacters", ctx, playersBuf) or 0
+
+    local selfName = playerPawn ~= nil and actorName(playerPawn) or nil
+    local excluded = nil
+    if selfName ~= nil then excluded = { [selfName] = true } end
+
+    for i = 1, nPly do
+        local a = playersBuf[i]
+        local n = actorName(a)
+        if n ~= nil then
+            excluded = excluded or {}
+            excluded[n] = true
+            if cfg.showPlayers and n ~= selfName then
+                S.players[#S.players + 1] = a
+            end
+        end
+    end
+
+    local skipped = 0
+    if cfg.showPals then
+        local near, n = gatherNear(monstersBuf, nMon, px, py, maxD2, excluded, true)
+        for i = 1, n do
+            local e = near[i]
+            if inWorld(e.actor) then
+                addPal(cfg, e.actor, tribeOf(e.name), playerPawn)
+            else
+                skipped = skipped + 1
+            end
+        end
+        for i = 1, n do near[i].actor = nil end
+    end
+
+    if cfg.showNPCs then
+        local near, n = gatherNear(humansBuf, nHum, px, py, maxD2, excluded, false)
+        local limit = cfg.maxPalIcons
+        for i = 1, n do
+            if i > limit then break end
+            S.npcs[#S.npcs + 1] = near[i].actor
+        end
+        for i = 1, n do near[i].actor = nil end
+    end
+
+    for i = 1, nMon do monstersBuf[i] = nil end
+    for i = 1, nHum do humansBuf[i] = nil end
+    for i = 1, nPly do playersBuf[i] = nil end
+
+    if not reportedScan then
+        reportedScan = true
+        guard.log(string.format(
+            "character scan via PalUtility: %d pal monsters, %d human NPCs, %d players "
+            .. "-> %d pals drawn (%d skipped as not present in the world)",
+            nMon, nHum, nPly, #S.pals, skipped))
+    end
+    return true
+end
+
+-- The fallback: one UObject-array walk for characters, one for players,
+-- and the species-icon test to tell them apart. This is 2.1.0's path,
+-- kept verbatim for builds where PalUtility is not reachable.
+local function scanViaFindAll(cfg, px, py, maxD2, playerPawn)
+    local rawPals = findAll("PalCharacter", "characters")
     local palCount = #rawPals
 
     -- Excluded by actor NAME: names are unique within a level, and
@@ -370,7 +638,7 @@ function M.scanDynamic(cfg, px, py, zoom, playerPawn)
     local selfName = playerPawn ~= nil and addExcluded(excluded, playerPawn) or nil
     local nPlayers = 0
 
-    if wantCharacters and not rejectedClass["PalPlayerCharacter"] then
+    if not rejectedClass["PalPlayerCharacter"] then
         local all = findAll("PalPlayerCharacter", "players")
         if usableForExclusion("PalPlayerCharacter", #all, palCount) then
             nPlayers = #all
@@ -389,80 +657,75 @@ function M.scanDynamic(cfg, px, py, zoom, playerPawn)
     -- UObject array every scan for a result we had already decided to
     -- throw away, and the humans it was meant to find come out of the pass
     -- below for free.
-    if wantCharacters then
-        local near, n = nearScratch, 0
-        for i = 1, palCount do
-            local a = rawPals[i]
-            -- Distance FIRST. The name is only needed for the exclusion
-            -- set and the species lookup, and reading it for every actor
-            -- in the level - most of them kilometres away - doubled the
-            -- reflection cost of the scan.
-            local x, y = actorLocation(a)
-            if x ~= nil then
-                local d = dist2(x, y, px, py)
-                if d <= maxD2 then
-                    local name = actorName(a)
-                    if name ~= nil and not (excluded and excluded[name]) then
-                        n = n + 1
-                        local slot = near[n]
-                        if slot == nil then slot = {}; near[n] = slot end
-                        slot.actor, slot.d, slot.name = a, d, name
-                    end
+    local near, n = gatherNear(rawPals, palCount, px, py, maxD2, excluded, true)
+
+    -- Nearest first, so the icon budget always goes to what is closest.
+    local nPals, nHumans = 0, 0
+    for i = 1, n do
+        local e = near[i]
+        local tribe = tribeOf(e.name)
+        local icon = speciesIcon(tribe)
+        -- nil  = not probed yet
+        -- false + format unproven = we have no basis to filter anything
+        local isPal = (icon ~= false) or (not iconFormatWorks)
+        if isPal then
+            nPals = nPals + 1
+            if cfg.showPals and inWorld(e.actor) then
+                addPal(cfg, e.actor, tribe, playerPawn)
+            end
+        else
+            nHumans = nHumans + 1
+            if cfg.showNPCs then S.npcs[#S.npcs + 1] = e.actor end
+        end
+    end
+
+    -- one line, once: enough to tell "no pals nearby" apart from "the
+    -- filter ate them", which is the question this whole thing exists for
+    if not reportedScan and palCount > 0 then
+        reportedScan = true
+        guard.log(string.format(
+            "character scan via FindAllOf: %d PalCharacters, %d players excluded, "
+            .. "%d in range -> %d pals, %d humans",
+            palCount, nPlayers, n, nPals, nHumans))
+    end
+    if not reportedNoIcon and iconFormatWorks and noIconCount > 0 then
+        reportedNoIcon = true
+        guard.log("no species icon for: " .. table.concat(noIconNames, ", ", 1, noIconCount)
+            .. " - drawn as NPC humans, not as pals (turn 'Show NPC humans' off to hide them)")
+    end
+
+    -- do not keep actor references alive in the scratch table
+    for i = 1, n do near[i].actor = nil end
+end
+
+function M.scanDynamic(cfg, px, py, zoom, playerPawn)
+    local maxD2 = keepRadius2(zoom)
+
+    wipe(S.pals); wipe(S.players); wipe(S.npcs)
+
+    if cfg.showPals or cfg.showNPCs or cfg.showPlayers then
+        local ok = false
+        if utilState ~= 2 then
+            ok = scanViaUtility(cfg, px, py, maxD2, playerPawn, playerPawn) == true
+            if ok then
+                utilState = 1
+            elseif utilState == 0 then
+                -- Not "unavailable" on the first miss: the very first scans
+                -- can land while the world is still coming up. Only give up
+                -- after enough tries that a load screen cannot cost us the
+                -- fast path for the whole session.
+                utilTries = utilTries + 1
+                if utilTries >= UTIL_MAX_TRIES then
+                    utilState = 2
+                    guard.log("PalUtility is not reachable on this build; falling back to "
+                        .. "scanning the object array (pals and humans are told apart by "
+                        .. "their species icon instead)")
                 end
             end
         end
-        -- table.sort only sees the live prefix
-        for i = #near, n + 1, -1 do near[i] = nil end
-        table.sort(near, byDistance)
-
-        -- Nearest first, so the icon budget always goes to what is closest.
-        local limit = cfg.maxPalIcons
-        local nPals, nHumans = 0, 0
-        for i = 1, n do
-            local e = near[i]
-            local icon = speciesIcon(tribeOf(e.name))
-            -- nil  = not probed yet
-            -- false + format unproven = we have no basis to filter anything
-            local isPal = (icon ~= false) or (not iconFormatWorks)
-            if isPal then
-                nPals = nPals + 1
-                if cfg.showPals and #S.pals < limit then
-                    local a = e.actor
-                    local shiny = isShiny(a)
-                    if (not cfg.onlyShinyPals) or shiny then
-                        S.pals[#S.pals + 1] = {
-                            actor = a,
-                            -- resolved ONCE, at scan time. collect() used to
-                            -- string.format this path for every pal on every
-                            -- frame - 480 throwaway strings a second at the
-                            -- default settings.
-                            icon = (type(icon) == "string") and icon or nil,
-                            shiny = shiny, friend = isFriend(a, playerPawn),
-                        }
-                    end
-                end
-            else
-                nHumans = nHumans + 1
-                if cfg.showNPCs then S.npcs[#S.npcs + 1] = e.actor end
-            end
+        if not ok then
+            scanViaFindAll(cfg, px, py, maxD2, playerPawn)
         end
-
-        -- one line, once: enough to tell "no pals nearby" apart from "the
-        -- filter ate them", which is the question this whole thing exists for
-        if not reportedScan and palCount > 0 then
-            reportedScan = true
-            guard.log(string.format(
-                "character scan: %d PalCharacters, %d players excluded, %d in range -> %d pals, %d humans",
-                palCount, nPlayers, n, nPals, nHumans))
-        end
-        if not reportedNoIcon and iconFormatWorks and noIconCount > 0 then
-            reportedNoIcon = true
-            guard.log("no species icon for: " .. table.concat(noIconNames, ", ", 1, noIconCount)
-                .. " - drawn as NPC humans, not as pals (turn 'Show NPC humans' off to hide them)")
-        end
-
-        -- do not keep actor references alive in the scratch table
-        for i = 1, n do near[i].actor = nil end
     end
 
     S.lastScan = os.clock()
@@ -475,10 +738,31 @@ end
 -- SPREAD ACROSS TICKS. Every FindAllOf is a full walk of the UObject
 -- array, and running eleven of them back to back on the game thread is a
 -- frame spike you can feel - it was a large part of the 2.0.8 stuttering.
--- Only ONE class is scanned per call once things have settled (three
--- while a kind has never been looked at, so the map fills in quickly
--- after a load), and the expensive rebuild is deferred until the draw
--- path actually needs fresh static markers.
+-- Only ONE class is looked at per turn, and the expensive rebuild is
+-- deferred until the draw path actually needs fresh static markers.
+--
+-- 2.1.2 GOES FURTHER, because one class per turn was still not enough.
+-- The reported symptom was micro-stutters WHILE WALKING, as new places and
+-- items appeared - and that is the shape of this loop: the `FindAllOf` is
+-- one cost, but reading a location (and, for collectibles, the "already
+-- picked up" flag) off EVERY actor of that class is a reflection call per
+-- actor, and the lists grow as the player walks into denser country and
+-- the level streams more in. A hundred and twenty chests is a few hundred
+-- reflection calls in one pump, every time that kind comes round.
+--
+-- So the per-kind pass is now RESUMABLE: `stepStatic` does at most
+-- ACTORS_PER_STEP actors and returns, and it is driven from the movement
+-- tick (10 Hz) rather than the scan tick. A kind of any size is therefore
+-- spread over as many 100 ms ticks as it needs, no single pump does more
+-- than a bounded amount of reflection, and a big class costs a few extra
+-- tenths of a second to finish instead of one visible hitch.
+--
+-- The cursor holds actor references between ticks, which the rest of this
+-- file is careful never to do. It is safe HERE for the same reason the
+-- in-scan loop was: `actorLocation` validates before it reads, so an actor
+-- destroyed between two steps is skipped rather than dereferenced. The
+-- exposure is a few hundred milliseconds, and `M.forget` drops the cursor
+-- outright on a teleport or a world change.
 --
 -- This is only sound because these things do not move: a cache scanned
 -- thirty seconds ago is still exactly right, apart from items that have
@@ -488,19 +772,37 @@ local kindCache = {}      -- kind -> { x, y, ... }  positions only
 local kindSeen = {}       -- kind -> true once scanned at least once
 local rotation = 1
 
+local ACTORS_PER_STEP = 24
+
+-- in-progress pass over one class, or nil between kinds
+local cursor = nil        -- { spec, all, total, index, list, count }
+
 local function wantedKind(cfg, spec)
     if cfg[spec.cfg] == true then return true end
     if spec.kind == "camp" and cfg.autohideInBase then return true end
     return false
 end
 
-local function scanOneKind(cfg, spec)
-    local list = kindCache[spec.kind]
-    if list == nil then list = {}; kindCache[spec.kind] = list end
-
+local function beginKind(spec)
     local all = findAll(spec.class, spec.kind)
-    local count = 0
-    for i = 1, #all do
+    cursor = {
+        spec = spec, all = all, total = #all, index = 0,
+        list = {}, count = 0,       -- built aside, swapped in when complete
+    }
+end
+
+-- Advance the current pass by at most ACTORS_PER_STEP actors. Returns true
+-- when the kind is finished and its cache has been replaced.
+local function stepKind(cfg)
+    local c = cursor
+    local spec = c.spec
+    local list, count = c.list, c.count
+    local all = c.all
+    local i, stop = c.index, c.index + ACTORS_PER_STEP
+    if stop > c.total then stop = c.total end
+
+    while i < stop do
+        i = i + 1
         local a = all[i]
         local x, y = actorLocation(a)
         if x ~= nil then
@@ -514,8 +816,14 @@ local function scanOneKind(cfg, spec)
             end
         end
     end
-    for i = #list, count + 1, -1 do list[i] = nil end
+
+    c.index, c.count = i, count
+    if i < c.total then return false end
+
+    for j = #list, count + 1, -1 do list[j] = nil end
+    kindCache[spec.kind] = list
     kindSeen[spec.kind] = true
+    cursor = nil
     return true
 end
 
@@ -573,25 +881,34 @@ local function rebuildStatic(cfg, px, py, zoom)
     S.staticRebuildAt = os.clock()
 end
 
-function M.scanStatic(cfg, px, py, zoom)
-    -- three at a time while the map is still filling in after a load,
-    -- one at a time from then on
-    local budget = 1
-    for _, spec in ipairs(STATIC_KINDS) do
-        if wantedKind(cfg, spec) and not kindSeen[spec.kind] then budget = 3; break end
+-- Called from the MOVEMENT tick, ten times a second, and bounded. Most
+-- calls do nothing at all: it only picks up a new kind when one is due,
+-- and otherwise advances whichever pass is already running by one step.
+--
+-- `due` is the scan tick's signal that a full round is wanted (it fires at
+-- scanIntervalMs). Between rounds this returns immediately.
+function M.stepStatic(cfg, due)
+    if cursor ~= nil then
+        if stepKind(cfg) then
+            S.staticDirty = true
+            S.version = S.version + 1
+        end
+        return
     end
+    if not due then return end
 
+    -- Nothing running: retire any kind the user has turned off, then take
+    -- the next wanted one. Turning a kind off is pure table work, so all of
+    -- them can be retired in one go.
     local changed = false
     local checked = 0
-    while budget > 0 and checked < #STATIC_KINDS do
+    while checked < #STATIC_KINDS do
         local spec = STATIC_KINDS[rotation]
         rotation = (rotation % #STATIC_KINDS) + 1
         checked = checked + 1
         if wantedKind(cfg, spec) then
-            if scanOneKind(cfg, spec) then
-                changed = true
-            end
-            budget = budget - 1
+            beginKind(spec)
+            break
         elseif kindCache[spec.kind] ~= nil then
             kindCache[spec.kind] = nil     -- turned off: drop its markers
             kindSeen[spec.kind] = nil
@@ -604,6 +921,16 @@ function M.scanStatic(cfg, px, py, zoom)
         S.version = S.version + 1
     end
     -- rebuildStatic() is deferred to collect() so this scan stays spread out.
+end
+
+-- True while the map is still filling in after a load: main.lua uses it to
+-- ask for rounds more often until every wanted kind has been seen once, so
+-- the minimap populates quickly instead of one class every four seconds.
+function M.staticFilling(cfg)
+    for _, spec in ipairs(STATIC_KINDS) do
+        if wantedKind(cfg, spec) and not kindSeen[spec.kind] then return true end
+    end
+    return false
 end
 
 -- Base camp proximity is recomputed from the stored camp positions on
@@ -712,8 +1039,10 @@ function M.forget()
     S.staticDirty = false
     S.staticRebuildAt = 0.0
     S.version = S.version + 1
-    -- the per-kind caches hold world positions from the OLD level
+    -- the per-kind caches hold world positions from the OLD level, and the
+    -- in-progress pass holds actor references from it
     kindCache, kindSeen, rotation = {}, {}, 1
+    cursor = nil
     -- Species icons that RESOLVED are kept - the asset still exists. The
     -- ones that did not are re-decided, so a species first met during a
     -- load screen gets another chance instead of being a "human" forever.

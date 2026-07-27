@@ -143,6 +143,60 @@ hatch is `calibrate()`, which reads the live bounds out of the game's own
 iterates the defaults, so the retired `axis` block is ignored on load and gone
 from the file after the next save.
 
+**Fixed in 2.1.2 — the stutter while walking, and party pals on the map. Both
+came out of reading what 1.x actually did:**
+
+The 1.x blueprint's import table is the authority for how the old mod worked
+(`_tools/ModActor.patched.json`), and it says something 2.x had never noticed: it
+**did not scan for characters at all**. It called the game's own helpers —
+
+```
+/Script/Pal.PalUtility::GetPalMonsters(WorldContext, out TArray<PalCharacter>)
+/Script/Pal.PalUtility::GetHumanNPCs(WorldContext, out TArray<PalCharacter>)
+/Script/Pal.PalUtility::GetAllPlayerCharacters(WorldContext, out TArray)
+```
+
+2.x now prefers these, and it settles three separate problems at once:
+
+* **No object-array walk.** `FindAllOf` walks every UObject in the process, and
+  the character scan did it twice per tick. These return a list the game already
+  maintains. That was the single largest cost in the mod.
+* **Pal vs human stops being a guess.** 2.0.6 subtracted a class and erased every
+  pal; 2.0.8 stopped subtracting and drew humans as pals; 2.1.0 inferred it from
+  whether a species icon asset existed. The game just says which is which. The
+  species icon is now only used to pick the *picture*.
+* **Party pals stop appearing.** A pal in your team still has an actor — the game
+  keeps it rather than destroying and respawning one every throw — and
+  `FindAllOf("PalCharacter")` returned it. `GetPalMonsters` is world-scoped, and
+  on top of that each pal is checked with `bHidden` and `PalUtility::IsDead`
+  (which is what 1.x used, and why it had a "delay remove dead/caught pals"
+  setting). Neither check may filter on a build that does not expose it: an
+  unreadable property means *no opinion*, never *hide it* — getting that backwards
+  is how 2.0.6 emptied the minimap. If `PalUtility` is not reachable at all, the
+  2.1.1 scan runs unchanged and says so in the log.
+
+**The walking stutter.** The symptom was specific — micro-hitches *while walking*,
+as new places and items appeared — and that is the shape of the static scan. The
+`FindAllOf` is one cost, but reading a location off **every** actor of that class
+(plus the "already picked up" flag for collectibles) is a reflection call per
+actor, and those lists grow as you walk into denser country and the level streams
+more in. A hundred and twenty chests is a few hundred reflection calls in a single
+pump, every time that class comes round.
+
+So the per-class pass is **resumable**: at most 24 actors per step, driven from the
+movement tick (10 Hz) instead of the scan tick, and the scan tick no longer carries
+the character scan and a static class in the same pump. A class of any size now
+costs a few extra tenths of a second to finish instead of one visible hitch, and no
+pump does an unbounded amount of reflection. 1.x reached the same place from the
+other direction — it gave each kind its own timer at a different period (pals 5 s,
+players 12 s, chests and eggs 14 s, human NPCs 19 s) so two scans essentially never
+landed on the same frame. 2.x cannot spend a timer per kind (there is exactly one,
+by design — see the threading note), so the separation happens inside the pump.
+
+Measured in the harness: worst case 24 location reads per step instead of 120, zero
+object-array walks while a class is in progress, and zero walks at all for
+characters.
+
 **Fixed in 2.1.1 — the stutter as each arrow turned into a pal portrait:**
 
 The report was, again, exactly the detail that made it findable: the map comes up

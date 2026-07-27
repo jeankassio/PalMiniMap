@@ -1,5 +1,5 @@
 -- =====================================================================
--- PalMiniMap 2.1.1 - a native minimap for Palworld
+-- PalMiniMap 2.1.2 - a native minimap for Palworld
 --
 -- No blueprint, no .pak, no shipped assets. The whole mod is this Lua
 -- script driving UMG through UE4SS reflection, drawing the game's own
@@ -525,6 +525,12 @@ end
 -- ---------------------------------------------------------------
 local NO_MARKS = {}
 
+-- Set by the scan tick, consumed by the movement tick: "a new static class
+-- may be started now". While the map is still filling in after a load the
+-- movement tick sets it itself, so the markers appear in a couple of
+-- seconds instead of one class every four.
+local staticDue = false
+
 local function movementTick()
     if not render.isBuilt() then return end
     local p = frameState
@@ -567,11 +573,18 @@ local function movementTick()
     lastDrawSourceVersion = sourceVersion
 end
 
--- sources.scanStatic() only walks ONE object class per call now (see the
--- note there), so it is called every scan tick rather than being held back
--- for a slow timer: that is what turns one eleven-walk spike into eleven
--- ordinary ticks. The static cache is rebuilt lazily by sources.collect(),
--- so the expensive sort/merge is kept off the scan spike itself.
+-- The scan tick is now the DYNAMIC scan only. 2.1.1 ran the character scan
+-- and a static class in the same pump, which made one tick in every forty
+-- the expensive one - felt as a periodic hitch while walking. The static
+-- side is driven from the movement tick instead (see below), a bounded
+-- number of actors at a time, so no pump ever carries both.
+--
+-- 1.x reached the same conclusion by a different route: it gave every kind
+-- its own timer at a different period (pals 5 s, players 12 s, chests and
+-- eggs 14 s, human NPCs 19 s) so two scans essentially never landed on the
+-- same frame. We cannot spend a timer per kind - see the threading note at
+-- the top of this file, there is exactly one - so the separation is done
+-- in the pump instead.
 local function scanTick()
     if not settled() then return end
     local p = frameState
@@ -580,8 +593,19 @@ local function scanTick()
 
     -- the player character doubles as the reference for IsFriend
     sources.scanDynamic(cfg, p.x, p.y, zoom, p.pawn)
-    sources.scanStatic(cfg, p.x, p.y, zoom)
     sources.updateProximity(cfg, p.x, p.y)
+    staticDue = true
+end
+
+-- One bounded slice of the static scan, on the movement tick. Deliberately
+-- OUTSIDE movementTick: that returns early when the minimap is hidden or
+-- when nothing moved, and the map filling in must not depend on the player
+-- walking around.
+local function staticTick()
+    if not settled() then return end
+    if not staticDue and sources.staticFilling(cfg) then staticDue = true end
+    sources.stepStatic(cfg, staticDue)
+    staticDue = false
 end
 
 local function maintenanceTick()
@@ -1006,7 +1030,12 @@ local function pump()
     if wantMove then
         lastMove = now
         guard.try("movementTick", movementTick)
-        -- AFTER the draw, never before it. The one place in the mod that
+        -- Both of the following are AFTER the draw and both are bounded.
+        -- Between them they are the only reflection-heavy work left off the
+        -- scan tick, and neither may grow with how much is around the
+        -- player - that is what made walking hitch.
+        guard.try("staticTick", staticTick)
+        -- The one place in the mod that
         -- is allowed to call LoadAsset, and it is deliberately the last
         -- thing in the tick: whatever it costs is paid once the frame's
         -- real work is already done, and its own throttle (assets.lua)
@@ -1075,4 +1104,4 @@ guard.register("pump loop", function()
     LoopAsync(PUMP_MS, guard.loopBody("pump", pump, anythingDue))
 end)
 
-guard.log("PalMiniMap 2.1.1 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
+guard.log("PalMiniMap 2.1.2 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
