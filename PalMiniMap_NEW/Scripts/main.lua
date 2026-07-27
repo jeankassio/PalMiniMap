@@ -1,5 +1,5 @@
 -- =====================================================================
--- PalMiniMap 2.1.9 - a native minimap for Palworld
+-- PalMiniMap 2.2.0 - a native minimap for Palworld
 --
 -- No blueprint, no .pak, no shipped assets. The whole mod is this Lua
 -- script driving UMG through UE4SS reflection, drawing the game's own
@@ -128,6 +128,13 @@ if config == nil or worldmap == nil or assets == nil
    or render == nil or sources == nil or menu == nil then
     guard.log("PalMiniMap is disabled for this session (missing module above).")
     do return end
+end
+
+-- The shipped icon PNGs sit beside Scripts/, not inside it. Without a script
+-- directory there is nothing to point at, and assets.lua stays on the package
+-- loader on its own - see the note it logs half a minute in.
+if SCRIPT_DIR ~= nil then
+    assets.setIconDir(SCRIPT_DIR .. "/../icons")
 end
 
 config.setPath((SCRIPT_DIR or ".") .. "/../minimap_settings.json")
@@ -1201,4 +1208,4 @@ guard.register("pump loop", function()
     LoopAsync(PUMP_MS, guard.loopBody("pump", pump, anythingDue))
 end)
 
-guard.log("PalMiniMap 2.1.9 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
+guard.log("PalMiniMap 2.2.0 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")

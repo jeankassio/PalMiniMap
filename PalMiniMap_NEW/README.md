@@ -1,8 +1,10 @@
-# PalMiniMap 2.1 — native minimap for Palworld
+# PalMiniMap 2.2 — native minimap for Palworld
 
-A complete rewrite. No blueprint, **no `.pak`**, no bundled assets — the whole
-mod is UE4SS Lua driving UMG, drawing the game's own world map texture and the
-game's own icon textures.
+A complete rewrite. No blueprint, **no `.pak`** — the whole mod is UE4SS Lua
+driving UMG, drawing the game's own world map texture and the game's own icon
+art. Since 2.2.0 that icon art is shipped as loose PNG in `icons/`, extracted
+from the game's own `.pak` by `tools/extract_icons.py`; see
+[Why the icons are files](#why-the-icons-are-files-220).
 
 ## Why it was rewritten
 
@@ -28,7 +30,8 @@ Version 2 has neither mechanism, so neither class of bug can occur.
 | icons | `StaticMeshComponent` attached to actors | pooled UMG `Image` widgets |
 | icon lifetime | created/destroyed constantly | fixed pool, allocated once, reused |
 | update rate | per frame | 10 Hz movement, 0.25 Hz pal scan, 15 s static scan |
-| assets shipped | a `.pak` | none |
+| assets shipped | a `.pak` | 455 loose PNG icons (3.1 MB), no cooked content |
+| icon loading | `LoadAsset` per species | `ImportFileAsTexture2D` from `icons/` |
 | packaging | Steam/Nexus `.pak` + Game Pass IoStore triplet | one identical package |
 
 Panning is done by moving a large `Image` inside a clipped `CanvasPanel`, so the
@@ -120,8 +123,52 @@ and foundation of the player's base showed up as a marker.
 
 Pal species come from the actor name (`BP_<Tribe>_C_<id>` → `<Tribe>`),
 which is exactly how the blueprint looked up its icon table, and the tribe
-maps straight onto `/Game/Pal/Texture/PalIcon/Normal/T_<Tribe>_icon_normal`
-— 137 species icons, nothing shipped.
+maps straight onto `/Game/Pal/Texture/PalIcon/Normal/T_<Tribe>_icon_normal`.
+
+## Why the icons are files (2.2.0)
+
+Up to 2.1.9 every portrait was fetched with `LoadAsset`, and no amount of
+throttling made the stutter go away. The reason is that the cost is not the
+icon: **`LoadAsset` is a synchronous flush of the engine's async loading
+queue**, so it waits for whatever the game itself is streaming at that instant
+before it even starts on ours. Riding into town the game streams constantly, so
+a 128×128 portrait can block the frame for as long as a level chunk takes. No
+budget the mod picks can fix that, because the mod is not the one spending the
+time.
+
+So the portraits now ship with the mod as PNG and are loaded with
+`UKismetRenderingLibrary::ImportFileAsTexture2D` — confirmed present in the
+shipping build. That call reads a loose file, decodes it through IImageWrapper
+and builds a **transient** texture: one mip, `NeverStream`. It touches no
+package, no async loading queue and no streaming manager, so it cannot queue
+behind the game's own IO.
+
+`tools/extract_icons.py` pulls the art out of the game's own `.pak` with
+`repak`, unwraps mip 0 of the cooked `FTexturePlatformData`, and writes PNG
+named after the **asset's object name** — so
+`/Game/…/T_Alpaca_icon_normal.T_Alpaca_icon_normal` becomes
+`icons/T_Alpaca_icon_normal.png` and nothing else in the mod needs to know the
+route exists. Portraits are downscaled to 64 px on the way out, because a
+transient texture has no mip chain and the minimap draws them at 10–40 px;
+doing the filtering once at extraction is what the mip chain would have done
+every frame.
+
+Three things are load-bearing and easy to break:
+
+* **Anything without a PNG still takes the old road.** The world map texture
+  above all — it is enormous and loaded exactly once, so shipping it would cost
+  tens of MB and remove no stutter. If `icons/` is missing, or the engine
+  refuses an import, the mod falls back to `LoadAsset` and says so in the log.
+* **A transient texture belongs to no package.** The only thing keeping it
+  alive is the UMG brush it sits on; once the last icon using it moves on,
+  Unreal is free to collect it and leave a dead pointer in the cache. Handing
+  that to `SetBrushFromTexture` is an access violation with no Lua error to
+  catch. `assets.lua` guards it from both sides — it lets go of anything
+  nobody has drawn for 20 s (dropping a *live* reference, which is the safe
+  half), and validates what survives once per pump before returning it.
+* **`icons/` must deploy beside `Scripts/`, not inside it.** `Info.json`'s
+  install rule lists `./icons` without a trailing slash, which copies the
+  folder itself; `assets.lua` looks for it at `<script dir>/../icons`.
 
 Settings live in `minimap_settings.json` next to the mod folder. It is plain
 JSON owned by this mod — nothing else reads it, so there is no half-written-file

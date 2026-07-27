@@ -2,7 +2,7 @@
   "ModName": "PalMiniMap",
   "PackageName": "PalMiniMap",
   "Thumbnail": "thumbnail.png",
-  "Version": "v2.1.10",
+  "Version": "v2.2.0",
   "MinRevision": 82182,
   "Author": "Jean Kassio",
   "Dependencies": [
@@ -16,7 +16,8 @@
     {
       "Type": "Lua",
       "Targets": [
-        "./Scripts"
+        "./Scripts",
+        "./icons"
       ]
     }
   ]
