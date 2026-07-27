@@ -854,10 +854,25 @@ end
 -- the end. So the two never meet. This table is consulted ONLY for actors the
 -- classifier has already called human.
 --
--- Anyone not in the table keeps the generic marker, which is correct rather
--- than a gap: villagers and merchants have no portrait in the game either.
+-- 2.2.12 FIXES TWO MISTAKES IN THE 2.2.2 VERSION, both of which showed up as
+-- "the merchant is just an arrow":
+--
+--   1. THE TABLE WAS FILTERED TO `/PalIcon/NPC/`, which kept 34 rows - only
+--      the named "BOSS" humans. A merchant's, villager's or guard's portrait
+--      is NOT in that folder; it sits in PalIcon/Normal beside the Pals:
+--          Male_Trader01    -> T_PalDealer_icon_normal
+--          VisitingMerchant -> T_Female_MobuCitizen_icon_normal
+--          Guard_Rifle      -> T_Police_icon_normal
+--      The folder says nothing about human-versus-Pal, so filtering on it was
+--      wrong. All 674 rows are generated now, with the full path, because the
+--      folder varies per row.
+--
+--   2. IT WAS KEYED BY THE ACTOR'S NAME. That works for Pals, whose actor is
+--      `BP_<CharacterID>_C_<n>`, and NEVER works for humans: one blueprint,
+--      `BP_NPC_HumanNormal`, is spawned as a merchant, a villager or a guard,
+--      so the actor name cannot possibly say which. The game keys this table
+--      by CharacterID, which is a runtime property - see characterIdOf below.
 -- ---------------------------------------------------------------
-local NPC_IN = "/Game/Pal/Texture/PalIcon/NPC/"
 local NPC_ICON = (function()
     local ok, t = pcall(require, "npcicons")
     if ok and type(t) == "table" then return t end
@@ -866,22 +881,97 @@ local NPC_ICON = (function()
     return {}
 end)()
 
--- tribe -> full asset path, or false for "no portrait". Resolved once and
--- kept, for the same reason addPal resolves its path at scan time: building
--- it per NPC per frame is throwaway strings on the draw path.
+-- The game's own key for "which character is this", which is what the icon
+-- table is indexed by. Four routes because none of them is guaranteed on a
+-- given UE4SS build; the one that works is remembered and logged once, the
+-- same pattern the base camp check uses.
+--
+-- Route A is deliberately first: it is the SAME two hops the shiny test
+-- already makes on every pal (GetCharacterParameterComponent ->
+-- IndividualParameter), so it is known safe on this build rather than hoped
+-- to be. The later ones walk further, and walking further into a
+-- half-constructed actor is what has crashed this mod before.
+local function rawCharIdA(actor)
+    return actor:GetCharacterParameterComponent().IndividualParameter:GetCharacterID()
+end
+local function rawCharIdB(actor) return actor:GetCharacterID() end
+local function rawCharIdC(actor)
+    return actor:GetCharacterParameterComponent().IndividualParameter.SaveParameter.CharacterID
+end
+local function rawCharIdD(actor) return actor:GetMainMesh().CharacterID end
+
+local CHAR_ID_ROUTES = {
+    { name = "IndividualParameter:GetCharacterID()", fn = rawCharIdA },
+    { name = "actor:GetCharacterID()",               fn = rawCharIdB },
+    { name = "SaveParameter.CharacterID",            fn = rawCharIdC },
+    { name = "GetMainMesh().CharacterID",            fn = rawCharIdD },
+}
+local charIdRoute = nil
+local charIdMisses = 0           -- actors no route could answer, for the warning
+local CHAR_ID_WARN = 60
+
+local function rawFNameString(v) return v:ToString() end
+
+local function asName(v)
+    if type(v) == "string" then return v ~= "" and v or nil end
+    if v == nil then return nil end
+    local s = guard.get(rawFNameString, v)      -- FName
+    if type(s) == "string" and s ~= "" and s ~= "None" then return s end
+    return nil
+end
+
+local function characterIdOf(actor)
+    if actor == nil then return nil end
+    if charIdRoute ~= nil then
+        return asName(guard.get(charIdRoute.fn, actor))
+    end
+    for i = 1, #CHAR_ID_ROUTES do
+        local r = CHAR_ID_ROUTES[i]
+        local id = asName(guard.get(r.fn, actor))
+        if id ~= nil then
+            charIdRoute = r
+            charIdMisses = 0
+            guard.log("NPC portraits: character IDs read via " .. r.name)
+            return id
+        end
+    end
+    -- KEEP TRYING. A give-up counter was written here first and was wrong:
+    -- an actor still spawning answers nothing on any route, and a handful of
+    -- those in a row would switch the feature off for the session before the
+    -- first NPC that could have answered ever arrived. Four failed pcalls per
+    -- human per scan is ~24 a second at the icon budget - nothing next to the
+    -- actor scans - so it costs less to keep asking than to be wrong.
+    charIdMisses = charIdMisses + 1
+    if charIdMisses == CHAR_ID_WARN then
+        guard.log("no way to read a character's CharacterID on this build, so human "
+            .. "portraits fall back to the actor name - which is right for pals and "
+            .. "wrong for most humans. Please report this.")
+    end
+    return nil
+end
+
+-- CharacterID -> full asset path, or false for "no portrait". Resolved once
+-- and kept, for the same reason addPal resolves its path at scan time:
+-- building it per NPC per frame is throwaway strings on the draw path.
 local npcPathFor = {}
 
-local function npcIcon(tribe)
-    if tribe == nil then return nil end
-    local known = npcPathFor[tribe]
+local function npcIcon(actor, name)
+    local id = characterIdOf(actor)
+    -- Fallback for a build where no route answers: the actor name. It is
+    -- right for Pals and for the handful of humans whose blueprint happens to
+    -- be named after their CharacterID, and wrong for the rest - which is
+    -- still better than every human being an arrow.
+    if id == nil then id = tribeOf(name) end
+    if id == nil then return nil end
+
+    local known = npcPathFor[id]
     if known ~= nil then return known or nil end
-    local name = NPC_ICON[tribe]
-    if name == nil then
-        npcPathFor[tribe] = false
+    local path = NPC_ICON[id]
+    if path == nil then
+        npcPathFor[id] = false
         return nil
     end
-    local path = NPC_IN .. name .. "." .. name
-    npcPathFor[tribe] = path
+    npcPathFor[id] = path
     return path
 end
 
@@ -903,7 +993,7 @@ end
 -- The list is filled in distance order, so this keeps the nearest.
 local function addNPC(cfg, actor, name)
     if #S.npcs >= (cfg.maxNpcIcons or 24) then return end
-    S.npcs[#S.npcs + 1] = { actor = actor, icon = npcIcon(tribeOf(name)) }
+    S.npcs[#S.npcs + 1] = { actor = actor, icon = npcIcon(actor, name) }
 end
 
 local function addPal(cfg, actor, tribe, playerPawn)

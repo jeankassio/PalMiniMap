@@ -130,21 +130,49 @@ Pal species come from the actor name (`BP_<Tribe>_C_<id>` → `<Tribe>`),
 which is exactly how the blueprint looked up its icon table, and the tribe
 maps straight onto `/Game/Pal/Texture/PalIcon/Normal/T_<Tribe>_icon_normal`.
 
-**Human NPCs do not follow that convention (2.2.2).** The tribe
-`BOSS_Hunter_Rifle` uses `T_BOSS_NPC_Hunter`, `BOSS_Ninja` uses
-`T_BOSS_NPC_Male_Ninja`, `BOSS_Scientist_LaserRifle` uses
-`T_BOSS_NPC_Male_Scientist` — there is no rule to derive, so it is read out of
-the game's own `DT_PalCharacterIconDataTable` and generated into
-`Scripts/npcicons.lua`. Guessing from the names would have got several wrong
+**Human NPCs do not follow that convention.** The pairing lives in the game's
+own `DT_PalCharacterIconDataTable`, which `tools/extract_icons.py` decodes into
+`Scripts/npcicons.lua`. Guessing from names would get several wrong, silently,
 in a way that only ever looks like the wrong face on the map.
+
+**2.2.12 fixes two mistakes in the 2.2.2 version of that**, both of which
+showed up as *"the merchant is just an arrow"*:
+
+1. **The generated table was filtered to `/PalIcon/NPC/`**, which kept 34 rows
+   — only the named "BOSS" humans. A merchant's, villager's or guard's portrait
+   is not in that folder; it sits in `PalIcon/Normal` beside the Pals:
+
+   | CharacterID | portrait |
+   |---|---|
+   | `Male_Trader01` | `T_PalDealer_icon_normal` |
+   | `Male_Trader02` | `T_SalesPerson_Green_icon_normal` |
+   | `VisitingMerchant` | `T_Female_MobuCitizen_icon_normal` |
+   | `Guard_Rifle` | `T_Police_icon_normal` |
+   | `BOSS_Hunter_Rifle` | `PalIcon/NPC/T_BOSS_NPC_Hunter` |
+
+   The folder says nothing about human-versus-Pal, so filtering on it was
+   simply wrong. All 674 rows are generated now, with the full path, because
+   the folder varies per row.
+
+2. **It was keyed by the actor's name.** That works for Pals, whose actor is
+   `BP_<CharacterID>_C_<n>`, and can *never* work for humans: the same
+   blueprint, `BP_NPC_HumanNormal`, is spawned as a merchant, a villager or a
+   guard, so the actor name cannot possibly say which. The lookup now reads the
+   game's own **`CharacterID`** at scan time, trying four routes and logging
+   which one answered. The first is `GetCharacterParameterComponent()
+   .IndividualParameter:GetCharacterID()` — deliberately, because those are the
+   same two hops the shiny test already makes on every pal, so it is known safe
+   on this build rather than hoped to be.
+
+If no route answers, it falls back to the actor name, which is right for Pals
+and wrong for most humans — still better than every human being an arrow.
 
 That lookup is deliberately kept **apart from `speciesIcon`**, which is what
 decides pal-versus-human in the first place (a tribe whose species icon exists
 *is* a pal). Teaching it about human portraits would make every human answer
 "yes, I am a pal" — the 2.0.8 regression, humans eating the pal budget. The
-NPC table is consulted only for actors already classified as human, and anyone
-not in it keeps the generic marker, which is right: villagers and merchants
-have no portrait in the game either.
+table is consulted only for actors already classified as human, and anyone not
+in it keeps the generic marker.
 
 Humans also get an icon budget of their own, `maxNpcIcons` (default 24). Both
 alternatives were tried first and are worse: letting them take `maxPalIcons`

@@ -324,26 +324,46 @@ def icon_table_rows() -> dict[str, tuple[str, str]]:
 
 
 def write_npc_table(rows: dict[str, tuple[str, str]]) -> int:
-    npc = {key: obj for key, (package, obj) in rows.items()
-           if "/PalIcon/NPC/" in package}
+    """CharacterID -> caminho completo da textura, para TODA linha da tabela.
+
+    A versao 2.2.2 filtrava `if "/PalIcon/NPC/" in package` e ficava com 34
+    linhas - so os NPCs "BOSS". Isso descartava justamente os que o jogador
+    encontra o tempo todo, porque o retrato de mercador, aldeao e guarda NAO
+    fica em PalIcon/NPC: fica em PalIcon/Normal, junto com os dos Pals.
+
+        Male_Trader01    -> PalIcon/Normal/T_PalDealer_icon_normal
+        Male_Trader02    -> PalIcon/Normal/T_SalesPerson_Green_icon_normal
+        VisitingMerchant -> PalIcon/Normal/T_Female_MobuCitizen_icon_normal
+        Guard_Rifle      -> PalIcon/Normal/T_Police_icon_normal
+        BOSS_Hunter_Rifle-> PalIcon/NPC/T_BOSS_NPC_Hunter
+
+    Ou seja: a pasta nao diz nada sobre ser humano ou Pal, e nao havia razao
+    para filtrar por ela. Agora vai a tabela inteira, com o caminho completo,
+    porque a pasta varia por linha e o Lua nao tem como adivinhar.
+    """
     lines = [
         "-- GERADO POR tools/extract_icons.py - NAO EDITE A MAO.",
         "--",
-        "-- Tribo de NPC humano -> nome do objeto da textura, lido da",
-        "-- DT_PalCharacterIconDataTable do jogo. Existe porque, ao contrario",
-        "-- dos Pals, o nome do icone de um humano NAO sai da tribo:",
-        "-- BOSS_Hunter_Rifle usa T_BOSS_NPC_Hunter.",
+        "-- CharacterID -> caminho da textura do retrato, lido da",
+        "-- DT_PalCharacterIconDataTable do jogo.",
         "--",
-        "-- Quem nao esta aqui fica com o marcador generico, que e o certo:",
-        "-- aldeoes e mercadores nao tem retrato proprio no jogo.",
+        "-- E indexado pelo CharacterID e nao pelo nome do ator: um mesmo",
+        "-- blueprint (BP_NPC_HumanNormal) e spawnado como mercador, aldeao",
+        "-- ou guarda, entao o nome do ator NAO determina o retrato. Ver",
+        "-- characterIdOf() em sources.lua.",
+        "--",
+        "-- O caminho vem completo porque a pasta muda por linha: retrato de",
+        "-- mercador fica em PalIcon/Normal, o dos NPC 'BOSS' em PalIcon/NPC.",
         "",
         "return {",
     ]
-    for key in sorted(npc):
-        lines.append(f'    ["{key}"] = "{npc[key]}",')
+    for key in sorted(rows):
+        package, obj = rows[key]
+        # o pacote vem como /Game/Pal/Texture/... ; o objeto e o nome dentro
+        lines.append(f'    ["{key}"] = "{package}.{obj}",')
     lines.append("}")
     NPC_LUA.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return len(npc)
+    return len(rows)
 
 
 def main() -> int:
