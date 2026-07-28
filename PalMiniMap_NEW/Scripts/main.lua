@@ -1,5 +1,5 @@
 -- =====================================================================
--- PalMiniMap 2.2.13 - a native minimap for Palworld
+-- PalMiniMap 2.2.14 - a native minimap for Palworld
 --
 -- No blueprint, no .pak, no shipped assets. The whole mod is this Lua
 -- script driving UMG through UE4SS reflection, drawing the game's own
@@ -359,6 +359,18 @@ local function currentWorldName()
     return tostring(n)
 end
 
+-- "This is a real, playable world."
+--
+-- The world-name blocklist alone is a GUESS at what Palworld calls its
+-- title screens, and getting it wrong reintroduces the 2.0.2 crash
+-- (SetInputMode on a title-screen controller about to be destroyed).
+-- "There is a pawn to control" is not a guess: the splash, login and title
+-- flows have none, and a real world always does. Both are required.
+local function inGameWorld()
+    if worldName == "" or NON_GAME_WORLDS[worldName] then return false end
+    return playerPawn() ~= nil
+end
+
 -- Viewport size, IN SLATE UNITS.
 --
 -- GetViewportSize reports PIXELS, but a UMG CanvasPanel positions its
@@ -479,6 +491,13 @@ local function ensureWidget()
     if render.isBuilt() and (editMode or not render.needsRebuild(cfg)) then
         return true
     end
+    -- NEVER BUILD OUTSIDE A REAL WORLD. A PlayerController exists on the
+    -- title screen too, so requiring one was not enough: changing the shape
+    -- in the F5 menu there went straight to rebuildNow() -> ensureWidget(),
+    -- which happily built a minimap over the main menu with no terrain and
+    -- no player in it - a white square. maintenanceTick had the right guard
+    -- all along; this path simply did not go through it.
+    if not inGameWorld() then return false end
     local pc = playerController()
     if pc == nil then return false end
     if not render.build(pc, cfg) then return false end
@@ -856,15 +875,8 @@ end
 menu.env = {
     controller  = playerController,
     viewport    = viewportSize,
-    -- The world-name blocklist is a guess at what Palworld calls its
-    -- title screens, and getting it wrong reintroduces the 2.0.2 crash
-    -- (SetInputMode on a title-screen controller that is about to be
-    -- destroyed). "There is a pawn to control" is not a guess: the splash,
-    -- login and title flows have none, and a real world always does.
-    isGameWorld = function()
-        if worldName == "" or NON_GAME_WORLDS[worldName] then return false end
-        return playerPawn() ~= nil
-    end,
+    -- Same predicate the widget build uses; see inGameWorld().
+    isGameWorld = inGameWorld,
 }
 
 -- ---------------------------------------------------------------
@@ -1136,4 +1148,4 @@ guard.register("pump loop", function()
     LoopAsync(PUMP_MS, guard.loopBody("pump", pump, anythingDue))
 end)
 
-guard.log("PalMiniMap 2.2.13 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
+guard.log("PalMiniMap 2.2.14 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
