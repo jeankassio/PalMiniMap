@@ -1,0 +1,829 @@
+-- =====================================================================
+-- render.lua - the minimap widget
+--
+-- THE WHOLE POINT OF VERSION 2, in one paragraph:
+--
+-- The 1.x mod inherited a SceneCaptureComponent2D that re-rendered the
+-- entire world from above into a render target EVERY FRAME - a second
+-- full render pass, all the time - and drew its icons as
+-- StaticMeshComponents attached to the actors they marked. That design
+-- produced every serious bug this mod ever had: the permanent GPU cost,
+-- the FPS decay as icon components piled up, and two hard crashes from
+-- dereferencing icons whose target actor had been destroyed.
+--
+-- This file has neither. The background is the game's own world map
+-- texture drawn as ONE quad, panned by moving it inside a clipped canvas.
+-- The icons are pooled UMG Images positioned by arithmetic. Nothing is
+-- ever attached to a world actor, and no reference to one is held across
+-- a frame, so an actor dying mid-update is a non-event instead of an
+-- access violation.
+--
+-- Every setter here goes through reflection, which is not free, so the
+-- update path writes only what actually CHANGED. Position is the only
+-- property that genuinely changes every frame.
+-- =====================================================================
+
+local guard = require("guard")
+local worldmap = require("worldmap")
+local assets = require("assets")
+
+local M = {}
+
+-- ESlateVisibility: 0 Visible, 1 Collapsed, 2 Hidden, 3 HitTestInvisible
+local VIS_SHOW, VIS_HIDE = 3, 1
+-- EWidgetClipping: 0 Inherit, 1 ClipToBounds
+local CLIP_BOUNDS = 1
+
+local MAP_TEXTURE = "/Game/Pal/Texture/UI/Map/T_WorldMap.T_WorldMap"
+-- Not a game asset: a path this mod owns, so assets.lua resolves it to
+-- icons/T_minimap_frame.png and never asks the package loader for it. See
+-- tools/make_frame.py, and tools/check_frame.py for why RIM/INSET are these.
+local FRAME_TEXTURE = "/PalMiniMap/T_minimap_frame.T_minimap_frame"
+local RIM   = 0.038     -- opaque bezel width, fraction of the diameter
+local INSET = 0.018     -- how much smaller the strip disc is than the widget
+local PLAYER_TEXTURE = "/Game/Pal/Texture/UI/InGame/T_icon_map_player.T_icon_map_player"
+-- Duplicated from sources.lua on purpose: this is the marker EVERY icon
+-- falls back to while its own portrait is still queued, so build() loads
+-- it up front rather than letting the draw loop discover it is missing.
+local MEMBER_TEXTURE = "/Game/Pal/Texture/UI/InGame/T_icon_map_member.T_icon_map_member"
+
+local S = {
+    widget = nil, tree = nil,
+    frame = nil, frameSlot = nil,
+    viewport = nil,
+    backdrop = nil, backdropSlot = nil,
+    rim = nil, rimSlot = nil,
+    mapImage = nil, mapSlot = nil, mapPx = nil,
+    mapTex = nil, mapTexPath = nil,
+    bands = nil,            -- circular mode: list of clipped strips
+    playerIcon = nil, playerSlot = nil,
+    playerSize = nil, playerAngle = nil,
+    pool = {},              -- { image=, slot=, inUse=, tex=, tint=, angle=, size= }
+    reportedSize = false,
+    visible = false,
+    builtSize = nil,
+    builtPool = nil,
+    builtCircular = nil,
+    rimSize = nil,
+    mapAngle = nil,
+    viewW = nil, viewH = nil,
+    editMode = false,
+    editBorder = nil, editSlot = nil,
+}
+
+-- Viewport size, remembered. applyLayout used to be called from build()
+-- with no size at all, so a negative (edge-relative) coordinate fell
+-- through to the 1920x1080 fallback.
+function M.setViewport(w, h)
+    if type(w) == "number" and w > 0 and type(h) == "number" and h > 0 then
+        S.viewW, S.viewH = w, h
+        return true
+    end
+    return false
+end
+
+-- Class lookups are memoised. A rebuild constructs up to 260 widgets and
+-- every one of them used to do its own StaticFindObject on the same half
+-- dozen class paths - a name lookup through the whole object hierarchy,
+-- hundreds of times, on the game thread, while the player was still
+-- clicking in the settings window.
+local classCache = {}
+
+local function cls(path)
+    local hit = classCache[path]
+    if hit ~= nil and guard.alive(hit) then return hit end
+    local obj = guard.get(StaticFindObject, path)
+    if obj and guard.alive(obj) then
+        classCache[path] = obj
+        return obj
+    end
+    classCache[path] = nil
+    return nil
+end
+
+local function construct(classPath, outer)
+    local class = cls(classPath)
+    if class == nil then return nil end
+    return guard.get(StaticConstructObject, class, outer)
+end
+
+-- ---------------------------------------------------------------
+-- Textures
+--
+-- All of the loading, caching, throttling and streaming-flag work now
+-- lives in assets.lua - see the long note at the top of that file for why
+-- it had to be pulled out of here. What is left is which paths this file
+-- asks for, and the rule that on a per-frame path it may only ever ASK:
+-- `assets.get` never blocks, and returns nil until the texture is in.
+-- ---------------------------------------------------------------
+local function mapTexturePath(cfg)
+    local override = cfg and cfg.terrainTexture
+    if type(override) == "string" and override ~= "" then return override end
+    return MAP_TEXTURE
+end
+
+-- Re-apply the quality setting to everything already loaded. Called when
+-- the menu changes it, never periodically - the flags live on the texture
+-- object, so setting them once is enough.
+function M.applyQuality(cfg)
+    assets.setQuality(cfg.mapQuality, mapTexturePath(cfg))
+end
+
+-- One-off diagnostic: how big the terrain texture really is, and how far
+-- it is being stretched. If the terrain still looks soft after forcing the
+-- mips resident, this line is the evidence - the source is simply not
+-- detailed enough, and the answer is `terrainTexture` pointing at a better
+-- asset, not another setting.
+local function reportTextureSize(tex, cfg, imagePx, size)
+    if S.reportedSize or tex == nil then return end
+    -- bounded retries rather than a one-shot flag: a build without
+    -- Blueprint_GetSizeX would otherwise burn a reflection call every
+    -- frame forever, and a one-shot flag would give up before the texture
+    -- had finished streaming in
+    S.sizeTries = (S.sizeTries or 0) + 1
+    if S.sizeTries > 5 then S.reportedSize = true; return end
+    local sx = guard.get(function() return tex:Blueprint_GetSizeX() end)
+    local sy = guard.get(function() return tex:Blueprint_GetSizeY() end)
+    if type(sx) ~= "number" or sx <= 0 then return end
+    S.reportedSize = true
+    -- how many source texels land on the visible part of the minimap
+    local texels = sx * (size / imagePx)
+    guard.log(string.format(
+        "terrain texture %dx%d; %d px of minimap shows %.0f texels (%.1fx magnification, quality %d)",
+        math.floor(sx), math.floor(sy or sx), math.floor(size), texels,
+        size / math.max(texels, 0.001), cfg.mapQuality or 0))
+end
+
+-- ---------------------------------------------------------------
+-- Reflection setters, allocation-free
+--
+-- The obvious way to write these is
+--     guard.get(function() slot:SetPosition({ X = x, Y = y }) end)
+-- and that allocates TWO garbage objects per call: the closure and the
+-- vector table. A single frame repositions the map (or 24 clipped strips),
+-- the player marker and up to 96 icons, ten times a second - several
+-- thousand throwaway objects a second, all of them collected on the game
+-- thread. That was a large part of the 2.0.8 stuttering.
+--
+-- So: hoisted functions called through pcall(fn, args), and ONE shared
+-- vector table refilled in place. UE4SS reads X/Y out of it during the
+-- call and does not keep a reference, so reuse is safe.
+-- ---------------------------------------------------------------
+local VEC = { X = 0.0, Y = 0.0 }
+
+local function rawSetPosition(slot, x, y)
+    VEC.X = x; VEC.Y = y
+    slot:SetPosition(VEC)
+end
+
+local function rawSetSize(slot, w, h)
+    VEC.X = w; VEC.Y = h
+    slot:SetSize(VEC)
+end
+
+local function rawSetPivot(w, x, y)
+    VEC.X = x; VEC.Y = y
+    w:SetRenderTransformPivot(VEC)
+end
+
+local function rawSetAngle(w, a) w:SetRenderTransformAngle(a) end
+local function rawSetBrush(w, tex) w:SetBrushFromTexture(tex, false) end
+local function rawSetTint(w, c) w:SetColorAndOpacity(c) end
+local function rawSetVisibility(w, v) w:SetVisibility(v) end
+
+local function setVisible(w, on)
+    if w == nil then return end
+    pcall(rawSetVisibility, w, on and VIS_SHOW or VIS_HIDE)
+end
+
+local function addToCanvas(canvas, child)
+    local slot = guard.get(function() return canvas:AddChildToCanvas(child) end)
+    if slot == nil then
+        slot = guard.get(function() return canvas:AddChild(child) end)
+    end
+    if slot ~= nil then
+        guard.get(function() slot:SetAutoSize(false) end)
+        guard.get(function() slot:SetAlignment({ X = 0.0, Y = 0.0 }) end)
+    end
+    return slot
+end
+
+local function setPos(slot, x, y)
+    if slot == nil then return end
+    pcall(rawSetPosition, slot, x, y)
+end
+
+local function setSize(slot, w, h)
+    if slot == nil then return end
+    pcall(rawSetSize, slot, w, h)
+end
+
+local function place(slot, x, y, w, h)
+    setPos(slot, x, y)
+    if w ~= nil then setSize(slot, w, h) end
+end
+
+-- Effective zoom, folding in the two zoom modes 1.x had:
+--   * megazoom (F1) replaces the zoom outright;
+--   * autozoom widens the view as the player moves faster, so walking is
+--     tight and flying shows more ground.
+-- `speed` is centimetres per second, straight from the pawn's velocity.
+function M.effectiveZoom(cfg, speed)
+    local zoom
+    if cfg.megazoomActive then
+        zoom = cfg.megazoom
+    else
+        zoom = cfg.zoom
+        if cfg.autozoom and type(speed) == "number" then
+            local mult = cfg.autozoomWalk
+            if speed > 1100 then mult = cfg.autozoomFly
+            elseif speed > 450 then mult = cfg.autozoomRun end
+            zoom = zoom * mult
+        end
+        if zoom < cfg.zoomMin then zoom = cfg.zoomMin end
+        if zoom > cfg.zoomMax * 4 then zoom = cfg.zoomMax * 4 end
+    end
+    -- a hand-edited settings file must never be able to divide by zero
+    if type(zoom) ~= "number" or zoom < 500 then zoom = 500 end
+    return zoom
+end
+
+-- Every mark kind that has a budget must be counted here, or the pool is too
+-- small and the draw loop silently drops whatever came last. This doubles as
+-- the rebuild trigger: needsRebuild compares the capacity, so a new budget
+-- key becomes a rebuild key for free.
+local function poolCapacity(cfg)
+    return (cfg.maxPalIcons or 48) + (cfg.maxPoiIcons or 48)
+         + (cfg.maxNpcIcons or 24)
+end
+
+-- ---------------------------------------------------------------
+-- Build / teardown
+-- ---------------------------------------------------------------
+function M.isBuilt() return S.widget ~= nil and guard.alive(S.widget) end
+
+function M.destroy()
+    if S.widget ~= nil and guard.alive(S.widget) then
+        guard.get(function() S.widget:RemoveFromParent() end)
+    end
+    S.widget, S.tree = nil, nil
+    S.frame, S.frameSlot, S.viewport = nil, nil, nil
+    S.backdrop, S.backdropSlot = nil, nil
+    S.mapImage, S.mapSlot, S.mapTex = nil, nil, nil
+    S.mapPx, S.mapAngle = nil, nil
+    S.bands = nil
+    S.rim, S.rimSlot, S.rimSize = nil, nil, nil
+    S.editBorder, S.editSlot = nil, nil
+    S.playerIcon, S.playerSlot = nil, nil
+    S.playerSize, S.playerAngle = nil, nil
+    S.pool = {}
+    S.visible = false
+    S.builtSize, S.builtPool, S.builtCircular = nil, nil, nil
+end
+
+local BACKDROP = { R = 0.02, G = 0.03, B = 0.05, A = 0.55 }
+
+-- ---------------------------------------------------------------
+-- The circular shape
+--
+-- 2.0.5 called itself circular but only drew a round decal ON TOP of a
+-- square map, so the terrain stayed square and the corners still showed.
+-- Making it genuinely round is harder than it sounds: Slate clips to
+-- axis-aligned RECTANGLES, and a real alpha mask needs a material, which
+-- cannot be authored from Lua. Covering the corners with an opaque colour
+-- is not an option either - outside the circle you must see the GAME, not
+-- a black box.
+--
+-- So the disc is built out of horizontal strips: each strip is its own
+-- ClipToBounds canvas, exactly as wide as the circle is at that height,
+-- and each holds its own copy of the map quad shifted to line up with its
+-- neighbours. The union of the strips IS the disc, and everything outside
+-- it was never drawn, so the game shows through.
+--
+-- The strips are spaced by ANGLE, not by height, which is what makes this
+-- affordable: the curvature is concentrated at the top and bottom, so
+-- uniform angle steps put thin strips exactly where the outline turns and
+-- tall ones down the sides where it barely moves. Each strip is as wide as
+-- the circle at its MIDDLE angle - taking the narrower of its two edges
+-- instead would collapse the polar strips to nothing and flatten the top
+-- and bottom of the disc.
+--
+-- Honest about the approximation: the worst radial error is about
+-- R * pi / (4n) - measured, +-4 px on a 240 px minimap with 24 strips. THE
+-- STAIRCASE IS VISIBLE, and 2.2.3 is the admission that no strip count fixes
+-- it: optimal (equal-ripple) spacing buys 0.1 px, and sub-pixel would need
+-- ~150 strips, each of which is a Slate clipping zone and therefore a draw
+-- call EVERY FRAME.
+--
+-- So the outline is not made accurate, it is COVERED. `icons/
+-- T_minimap_frame.png` is a shipped image whose inner edge is a real
+-- supersampled circle and whose opaque bezel (RIM) is wider than the error;
+-- the strips are inset (INSET) so none of them bulges past its outer edge.
+-- What the player sees is the frame's inner edge, which is exact at any
+-- size. `tools/check_frame.py` measures the margin across the whole 120-480
+-- range the menu allows, because getting this wrong is silent - it shows up
+-- as a notch of terrain on the rim at some sizes and not others.
+--
+-- There is no per-strip backdrop: the map texture is opaque, so the dark
+-- backdrop only ever shows outside the map bounds, and in circular mode
+-- letting the game show through there is the correct look anyway.
+--
+-- Cost: the strips are positioned once at build time; per frame it is one
+-- SetPosition each, and the GPU still only rasterises the pixels inside
+-- the disc.
+-- ---------------------------------------------------------------
+-- Each strip is its own Slate clipping zone, and a clipping zone change
+-- breaks batching - so every strip is one more draw call EVERY frame, not
+-- every update. 2.0.7 asked for a ~3 px outline error and got 31 strips;
+-- ~4 px costs 24 and is not tellable apart on a minimap once the game's
+-- circular art is drawn over the seam.
+-- The floor is 24, not 16: below that the staircase gets wider than the
+-- frame's bezel and terrain steps out past it. `tools/check_frame.py`
+-- reproduces this function and measures the margin at every size the menu
+-- allows - change either number there and it will tell you.
+local function bandCount(size)
+    local n = math.floor(size * 0.10 + 0.5)
+    if n < 24 then n = 24 elseif n > 36 then n = 36 end
+    return n
+end
+
+-- The strips are laid out on a radius slightly SMALLER than the widget
+-- (INSET) while staying centred in it. Without that, a strip corner reaches
+-- past the widget's own radius - the union of rectangles bulges outside the
+-- circle it approximates - and that bulge would sit outside the frame's
+-- bezel, which is the one place nothing can cover it.
+local function buildBands(size)
+    local n = bandCount(size)
+    local R = size * 0.5
+    local r = R - INSET * size
+    S.bands = {}
+    for k = 0, n - 1 do
+        local t0 = (k / n) * math.pi
+        local t1 = ((k + 1) / n) * math.pi
+        local y0 = R - r * math.cos(t0)
+        local y1 = R - r * math.cos(t1)
+        local w = r * math.sin((t0 + t1) * 0.5)
+        local h = y1 - y0
+        if w > 0.5 and h > 0.5 then
+            local panel = construct("/Script/UMG.CanvasPanel", S.tree)
+            if panel ~= nil then
+                local slot = addToCanvas(S.frame, panel)
+                place(slot, R - w, y0, w * 2.0, h)
+                guard.get(function() panel:SetClipping(CLIP_BOUNDS) end)
+                local img = construct("/Script/UMG.Image", S.tree)
+                if img ~= nil then
+                    local islot = addToCanvas(panel, img)
+                    setVisible(img, true)
+                    S.bands[#S.bands + 1] = {
+                        image = img, slot = islot,
+                        x = R - w, y = y0,        -- strip origin, frame-local
+                    }
+                end
+            end
+        end
+    end
+    if #S.bands == 0 then S.bands = nil end
+    return S.bands ~= nil
+end
+
+function M.build(pc, cfg)
+    M.destroy()
+    -- The four textures the minimap cannot be drawn without are fetched
+    -- synchronously, HERE, once, while the widget is being constructed
+    -- anyway. Everything else - 137 possible species portraits - goes
+    -- through the throttled queue and shows the member marker until it
+    -- arrives. That split is what keeps the loading cost off the frame.
+    assets.setQuality(cfg.mapQuality, mapTexturePath(cfg))
+    assets.loadNow(mapTexturePath(cfg), true)
+    assets.loadNow(MEMBER_TEXTURE, false)
+    local wbl = cls("/Script/UMG.Default__WidgetBlueprintLibrary")
+    local userWidgetClass = cls("/Script/UMG.UserWidget")
+    if wbl == nil or userWidgetClass == nil then
+        guard.log("UMG is not reachable; the minimap cannot be built")
+        return false
+    end
+    local world = guard.get(function() return pc:GetWorld() end)
+    local widget = guard.get(function() return wbl:Create(world, userWidgetClass, pc) end)
+    if not guard.alive(widget) then
+        guard.log("could not create the minimap widget")
+        return false
+    end
+    S.widget = widget
+    S.tree = guard.get(function() return widget.WidgetTree end)
+    if S.tree == nil then
+        guard.log("minimap widget has no WidgetTree")
+        M.destroy()
+        return false
+    end
+
+    local root = construct("/Script/UMG.CanvasPanel", S.tree)
+    if root == nil then M.destroy(); return false end
+    guard.get(function() S.tree.RootWidget = root end)
+
+    local size = cfg.size
+    local round = cfg.circular == true
+
+    -- The frame is the clipped window. Everything inside it is drawn in
+    -- frame-local pixels, which is what makes the panning arithmetic
+    -- below trivial.
+    S.frame = construct("/Script/UMG.CanvasPanel", S.tree)
+    if S.frame == nil then M.destroy(); return false end
+    S.frameSlot = addToCanvas(root, S.frame)
+    guard.get(function() S.frame:SetClipping(CLIP_BOUNDS) end)
+    S.viewport = S.frame
+
+    if round then
+        round = buildBands(size)
+        if not round then
+            guard.log("could not build the circular strips; falling back to square")
+        end
+    end
+
+    if not round then
+        -- square: one backdrop and one map quad
+        S.backdrop = construct("/Script/UMG.Border", S.tree)
+        if S.backdrop ~= nil then
+            guard.get(function() S.backdrop:SetBrushColor(BACKDROP) end)
+            -- the slot is kept so applyLayout can follow a size change
+            -- without a rebuild - see the edit-mode note in main.lua
+            S.backdropSlot = addToCanvas(S.frame, S.backdrop)
+            place(S.backdropSlot, 0, 0, size, size)
+            setVisible(S.backdrop, true)
+        end
+        S.mapImage = construct("/Script/UMG.Image", S.tree)
+        if S.mapImage == nil then M.destroy(); return false end
+        S.mapSlot = addToCanvas(S.viewport, S.mapImage)
+        setVisible(S.mapImage, true)
+    end
+
+    -- THE FRAME IS WHAT MAKES THE CIRCLE A CIRCLE (2.2.3).
+    --
+    -- Until now this slot held the game's own `T_prt_map_circle_eff`, which
+    -- is a soft rim glow: it decorated the seam between the strips but did
+    -- nothing about the staircase underneath, so the outline was visibly
+    -- faceted. `icons/T_minimap_frame.png` is a shipped image whose INNER
+    -- edge is a real, supersampled circle, and it is wide enough (RIM) to sit
+    -- over the whole of the strips' error. What the player sees as the
+    -- outline is that inner edge, so it is exact at any size.
+    --
+    -- It replaces the game's art rather than joining it: two rings on one
+    -- edge is muddy, and stretching a 128 px glow across the whole disc was
+    -- also washing the terrain out.
+    --
+    -- Drawn BELOW the icons (z 5) so a marker near the rim is not clipped by
+    -- the bezel, and above the strips so the staircase is covered.
+    if round then
+        S.rim = construct("/Script/UMG.Image", S.tree)
+        if S.rim ~= nil then
+            S.rimSlot = addToCanvas(S.viewport, S.rim)
+            guard.get(function() S.rimSlot:SetZOrder(5) end)
+            local ctex = assets.loadNow(FRAME_TEXTURE, false)
+            if ctex ~= nil then
+                guard.get(function() S.rim:SetBrushFromTexture(ctex, false) end)
+                place(S.rimSlot, 0, 0, size, size)
+                S.rimSize = size
+                setVisible(S.rim, true)
+            else
+                -- No frame image: the disc is the bare staircase again, which
+                -- is how it looked before 2.2.3 - worse, not broken.
+                setVisible(S.rim, false)
+                guard.log("icons/T_minimap_frame.png is missing, so the round "
+                    .. "minimap keeps the stepped outline; run "
+                    .. "tools/make_frame.py")
+            end
+        end
+    end
+
+    -- icon pool: allocated once, reused forever. No allocation, no
+    -- destruction and no GC churn while playing.
+    local capacity = poolCapacity(cfg)
+    for _ = 1, capacity do
+        local img = construct("/Script/UMG.Image", S.tree)
+        if img ~= nil then
+            local slot = addToCanvas(S.viewport, img)
+            guard.get(function() slot:SetZOrder(10) end)
+            setVisible(img, false)
+            S.pool[#S.pool + 1] = { image = img, slot = slot, inUse = false }
+        end
+    end
+
+    -- edit-mode highlight: hidden normally, shown while F4 is active
+    S.editBorder = construct("/Script/UMG.Border", S.tree)
+    if S.editBorder ~= nil then
+        guard.get(function()
+            S.editBorder:SetBrushColor({ R = 0.33, G = 0.78, B = 0.96, A = 0.28 })
+        end)
+        S.editSlot = addToCanvas(S.viewport, S.editBorder)
+        guard.get(function() S.editSlot:SetZOrder(90) end)
+        place(S.editSlot, 0, 0, size, size)
+        setVisible(S.editBorder, false)
+    end
+
+    -- the player marker sits on top, always dead centre
+    S.playerIcon = construct("/Script/UMG.Image", S.tree)
+    if S.playerIcon ~= nil then
+        S.playerSlot = addToCanvas(S.viewport, S.playerIcon)
+        guard.get(function() S.playerSlot:SetZOrder(50) end)
+        local tex = assets.loadNow(PLAYER_TEXTURE, false)
+        if tex then
+            guard.get(function() S.playerIcon:SetBrushFromTexture(tex, false) end)
+        else
+            guard.get(function()
+                S.playerIcon:SetColorAndOpacity({ R = 0.2, G = 0.9, B = 1.0, A = 1.0 })
+            end)
+        end
+        setVisible(S.playerIcon, true)
+    end
+
+    guard.get(function() widget:AddToViewport(0) end)
+    -- the whole tree must never take input; a minimap that eats clicks is
+    -- worse than no minimap
+    guard.get(function() widget:SetVisibility(VIS_SHOW) end)
+    guard.get(function() widget:SetRenderOpacity(cfg.opacity) end)
+
+    S.builtSize = size
+    S.builtPool = capacity
+    -- what was ASKED for, not what succeeded: if the strips could not be
+    -- constructed, recording `false` here would make needsRebuild() see a
+    -- mismatch on every maintenance tick and rebuild the widget forever
+    S.builtCircular = cfg.circular == true
+    S.visible = true
+    M.setEditMode(S.editMode)
+    M.applyLayout(cfg)
+    guard.log(string.format("minimap built (%dpx %s, %d icon slots%s)",
+        size, round and "circular" or "square", #S.pool,
+        round and (", " .. #S.bands .. " strips") or ""))
+    return true
+end
+
+-- Position/size of the window itself. Negative coordinates count back from
+-- the right/bottom edge, which keeps the default placement correct on any
+-- resolution.
+function M.applyLayout(cfg, viewportW, viewportH)
+    if not M.isBuilt() then return end
+    M.setViewport(viewportW, viewportH)
+    -- 1920x1080 is only the last resort; the corners still land in four
+    -- distinct places instead of stacking, and the next tick with a real
+    -- viewport size corrects it.
+    local vw = S.viewW or 1920
+    local vh = S.viewH or 1080
+    local size = cfg.size
+    local x, y = cfg.x, cfg.y
+    if x < 0 then x = vw + x - size end
+    if y < 0 then y = vh + y - size end
+    -- keep it on screen whatever the settings say
+    if x < 0 then x = 0 elseif x > vw - size then x = vw - size end
+    if y < 0 then y = 0 elseif y > vh - size then y = vh - size end
+    place(S.frameSlot, x, y, size, size)
+    if S.backdropSlot ~= nil then place(S.backdropSlot, 0, 0, size, size) end
+    if S.editSlot ~= nil then place(S.editSlot, 0, 0, size, size) end
+    guard.get(function() S.widget:SetRenderOpacity(cfg.opacity) end)
+end
+
+-- Edit mode needs to be obvious, otherwise the arrow keys feel broken.
+function M.setEditMode(on)
+    S.editMode = on and true or false
+    if S.editBorder ~= nil then
+        setVisible(S.editBorder, S.editMode)
+    end
+end
+
+function M.setVisible(on)
+    if not M.isBuilt() then return end
+    S.visible = on and true or false
+    guard.get(function() S.widget:SetVisibility(S.visible and VIS_SHOW or VIS_HIDE) end)
+end
+
+function M.isVisible() return S.visible end
+
+-- ---------------------------------------------------------------
+-- Per-update drawing
+--
+-- `player` = { x, y, yaw, speed }; `marks` is sources.collect()'s pooled
+-- array and `count` says how much of it is live. Callers pass plain
+-- numbers - never UObjects - so nothing here can touch a dying actor.
+-- ---------------------------------------------------------------
+local function drawTerrain(cfg, mapX, mapY, imagePx, pu, pv, rotate, yaw)
+    local tex = assets.get(mapTexturePath(cfg))
+    local angle = rotate and -yaw or 0.0
+
+    if S.bands ~= nil then
+        for i = 1, #S.bands do
+            local b = S.bands[i]
+            setPos(b.slot, mapX - b.x, mapY - b.y)
+            if b.px ~= imagePx then
+                b.px = imagePx
+                setSize(b.slot, imagePx, imagePx)
+            end
+            if tex ~= nil and b.tex == nil then
+                b.tex = tex
+                pcall(rawSetBrush, b.image, tex)
+            end
+            if rotate then
+                -- every strip holds the same quad at the same offset, so
+                -- the same normalised pivot rotates them all about the
+                -- player's point on the map and they stay seamless
+                pcall(rawSetPivot, b.image, pu, pv)
+            end
+            if b.angle ~= angle then
+                b.angle = angle
+                pcall(rawSetAngle, b.image, angle)
+            end
+        end
+        return tex
+    end
+
+    if tex ~= nil and S.mapTex == nil then
+        S.mapTex = tex
+        pcall(rawSetBrush, S.mapImage, tex)
+    end
+    setPos(S.mapSlot, mapX, mapY)
+    if S.mapPx ~= imagePx then
+        S.mapPx = imagePx
+        setSize(S.mapSlot, imagePx, imagePx)
+    end
+    if rotate then
+        pcall(rawSetPivot, S.mapImage, pu, pv)
+    end
+    if S.mapAngle ~= angle then
+        S.mapAngle = angle
+        pcall(rawSetAngle, S.mapImage, angle)
+    end
+    return tex
+end
+
+function M.update(cfg, player, marks, count)
+    if not M.isBuilt() or not S.visible then return end
+    if type(player) ~= "table" or type(player.x) ~= "number" then return end
+    count = count or 0
+
+    local size = cfg.size
+    local half = size * 0.5
+    local region = worldmap.regionFor(player.x, player.y)
+    local pu, pv = worldmap.toUV(player.x, player.y, region)
+    if pu == nil then return end
+
+    -- world units across the window -> pixels per normalised unit
+    local spanWorld = region.maxX - region.minX
+    if spanWorld <= 0 then return end
+    local zoom = M.effectiveZoom(cfg, player.speed)
+    local imagePx = size * (spanWorld / zoom)
+
+    local rotate = cfg.rotateWithCamera and type(player.yaw) == "number"
+    local cosA, sinA = 1.0, 0.0
+    if rotate then
+        local rad = -player.yaw * math.pi / 180.0
+        cosA, sinA = math.cos(rad), math.sin(rad)
+    end
+
+    -- background: the map quad(s), moved so the player's point is centred
+    local tex = drawTerrain(cfg, half - pu * imagePx, half - pv * imagePx,
+                            imagePx, pu, pv, rotate, player.yaw)
+    reportTextureSize(tex, cfg, imagePx, size)
+
+    -- player marker: always centred, rotated to show facing when the map
+    -- itself is not rotating
+    if S.playerSlot ~= nil then
+        local ps = cfg.playerIconSize
+        setPos(S.playerSlot, half - ps * 0.5, half - ps * 0.5)
+        if S.playerSize ~= ps then
+            S.playerSize = ps
+            setSize(S.playerSlot, ps, ps)
+        end
+        local pa = rotate and 0.0 or (player.yaw or 0.0)
+        if S.playerAngle ~= pa then
+            S.playerAngle = pa
+            pcall(rawSetAngle, S.playerIcon, pa)
+        end
+    end
+
+    -- the disc is real geometry now, but icons are still culled to it:
+    -- they are drawn in the square frame, not inside the strips
+    local round = S.bands ~= nil
+    if S.rimSlot ~= nil and S.rimSize ~= size then
+        S.rimSize = size
+        place(S.rimSlot, 0, 0, size, size)
+    end
+    local radius = half - (cfg.iconSize * 0.35)
+    local radius2 = radius * radius
+
+    -- icons
+    local used = 0
+    local limit = #S.pool
+    local margin = cfg.iconSize
+    local iconAngle = (rotate and not cfg.lockIconsNorth) and player.yaw or 0.0
+    for i = 1, count do
+        if used >= limit then break end
+        local m = marks[i]
+        local u, v = worldmap.toUV(m.x, m.y, region)
+        if u ~= nil then
+            local dx = (u - pu) * imagePx
+            local dy = (v - pv) * imagePx
+            if rotate then
+                dx, dy = dx * cosA - dy * sinA, dx * sinA + dy * cosA
+            end
+            -- cull anything outside the window before touching a widget
+            local inside
+            if round then
+                inside = (dx * dx + dy * dy) <= radius2
+            else
+                inside = dx > -half - margin and dx < half + margin
+                         and dy > -half - margin and dy < half + margin
+            end
+            if inside then
+                used = used + 1
+                local entry = S.pool[used]
+                local isz = m.size or cfg.iconSize
+                setPos(entry.slot, half + dx - isz * 0.5, half + dy - isz * 0.5)
+                if entry.size ~= isz then
+                    entry.size = isz
+                    setSize(entry.slot, isz, isz)
+                end
+                -- Species portraits can fail to resolve (a pal whose icon
+                -- asset is not cooked under the expected name); fall back
+                -- to the generic marker rather than drawing an empty box.
+                --
+                -- THIS LOOP MUST NOT LOAD ANYTHING. It runs for up to 96
+                -- icons ten times a second, and 2.1.0 called LoadAsset from
+                -- inside it for the fallback marker - which is the hitch the
+                -- player felt as each arrow turned into a portrait.
+                -- `assets.get` is a table lookup that schedules the load and
+                -- returns nil; the arrow simply stays until the portrait is
+                -- actually in memory, and swapping the brush then costs
+                -- nothing.
+                --
+                -- Keyed on what was REQUESTED, so an icon already showing
+                -- the right texture costs one table compare.
+                local desired = m.texture
+                if entry.want ~= desired then
+                    entry.want = desired
+                    entry.tex = nil
+                end
+
+                local brushPath, brushTex = nil, nil
+                if desired ~= nil then
+                    brushTex = assets.get(desired)
+                    if brushTex ~= nil then brushPath = desired end
+                end
+                if brushTex == nil and m.fallback ~= nil then
+                    brushTex = assets.get(m.fallback)
+                    if brushTex ~= nil then brushPath = m.fallback end
+                end
+
+                if brushTex ~= nil then
+                    if entry.tex ~= brushPath then
+                        entry.tex = brushPath
+                        pcall(rawSetBrush, entry.image, brushTex)
+                    end
+                else
+                    -- NOTHING resolved. Leaving the brush alone showed
+                    -- whatever marker last used this pool slot - a chest
+                    -- where a pal should be. An empty slot is skipped
+                    -- below instead.
+                    entry.tex = nil
+                end
+                if m.tint ~= nil and entry.tint ~= m.tint then
+                    entry.tint = m.tint
+                    pcall(rawSetTint, entry.image, m.tint)
+                end
+                -- 1.x's "lock all icon rotations to north": the map may
+                -- spin, the icons should not
+                if entry.angle ~= iconAngle then
+                    entry.angle = iconAngle
+                    pcall(rawSetAngle, entry.image, iconAngle)
+                end
+                -- a slot with no resolved brush stays hidden rather than
+                -- showing the previous marker's icon
+                local show = entry.tex ~= nil
+                if entry.inUse ~= show then
+                    setVisible(entry.image, show)
+                    entry.inUse = show
+                end
+            end
+        end
+    end
+    -- retire the rest of the pool without destroying anything
+    for i = used + 1, limit do
+        local entry = S.pool[i]
+        if entry.inUse then
+            setVisible(entry.image, false)
+            entry.inUse = false
+        end
+    end
+end
+
+-- A size change means the widget was built at the wrong dimensions, a
+-- max-icon change means the pool is the wrong length, and the shape is
+-- baked in at build time now that it is real geometry rather than a decal.
+-- 2.0.5 only checked the size, so "Max point-of-interest icons" did
+-- nothing at all until the game was restarted.
+function M.needsRebuild(cfg)
+    if S.builtSize ~= nil and S.builtSize ~= cfg.size then return true end
+    if S.builtPool ~= nil and S.builtPool ~= poolCapacity(cfg) then return true end
+    if S.builtCircular ~= nil and S.builtCircular ~= (cfg.circular == true) then
+        return true
+    end
+    return false
+end
+
+return M
