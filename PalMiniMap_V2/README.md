@@ -304,6 +304,44 @@ they go through the same downscale-on-extract path (`needs_downscale`), for the
 same reason: an imported texture has one mip, and sampling 256 px of art into
 an 18 px marker shimmers as the map moves.
 
+## Settings reset to defaults on restart (2.2.20)
+
+Reported on Nexus against 2.2.14: everything changed in the F5 menu works for
+the rest of the session and is back to factory defaults after a restart.
+
+The file on disk was **correct all along** — the save wrote `"showChests":
+false` exactly as it should. The *read* threw it away:
+
+```lua
+local s = (not SESSION_ONLY[k]) and stored and stored[k] or nil
+```
+
+In Lua, when `stored[k]` is `false` that whole chain evaluates to `nil`. The
+type check on the next line then rejects it and the **default** is used. So
+every toggle the player turned OFF came back on at the next launch, while
+numbers and toggles turned ON persisted fine — which is why it looked like a
+total reset rather than a partial one.
+
+The line is written out longhand now. It is the same Lua trap that had already
+bitten `uiprobe.lua`'s `show()` — `cond and value or fallback` is not a ternary
+when `value` can legitimately be `false`.
+
+`tools`-free to reproduce: `scratchpad/configtest.py` drives the real round
+trip (change → save to a file → drop the module → load again) and carries the
+2.2.14 line as a control, which loses five toggles.
+
+### `minimap_settings.json` must never be packaged
+
+Found while investigating: the player's settings file was being shipped inside
+all three distribution packages, carrying the author's own layout (size 450,
+position 1430,40, zoom 22000). On Nexus that overwrites the user's settings
+every time they extract an update; on the Steam Workshop it can be restored on
+any re-sync.
+
+It is removed from the packages and `.gitignore`d, so it cannot be added back
+by accident. **The already-published archives still contain it** — they need to
+be rebuilt before the next upload.
+
 ## Looted chests stayed on the map (2.2.19)
 
 `hideCollected` worked for notes and effigies and did nothing for chests.

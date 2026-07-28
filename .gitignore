@@ -1,1 +1,8 @@
 PalMiniMap_NEW/build/
+PalMiniMap_V2/build/
+
+# NUNCA EMPACOTAR: e o arquivo de configuracoes DO JOGADOR.
+# Enviado dentro do pacote, ele sobrescreve o do usuario a cada
+# sincronizacao da Workshop - foi o bug de "as configuracoes voltam
+# ao padrao ao reabrir o jogo".
+minimap_settings.json
