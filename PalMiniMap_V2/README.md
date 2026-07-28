@@ -304,6 +304,33 @@ they go through the same downscale-on-extract path (`needs_downscale`), for the
 same reason: an imported texture has one mip, and sampling 256 px of art into
 an 18 px marker shimmers as the map moves.
 
+## Looted chests stayed on the map (2.2.19)
+
+`hideCollected` worked for notes and effigies and did nothing for chests.
+
+The cause is that **there is no single "already taken" flag**, which every
+version until now assumed. `bPickedInClient` lives on
+`PalLevelObjectObtainable` — the base of notes and effigies *only*. It does
+not exist on a chest at all, so reading it there simply raised, the answer
+was always "not taken", and looted chests never went away.
+
+A chest keeps its state on its **model**, not on the actor:
+
+```
+PalMapObjectTreasureBox (actor) -> .MapObjectModel
+                                -> PalMapObjectTreasureBoxModel.bOpened
+```
+
+Both confirmed in `Palworld.usmap`. Each kind now names its own reader in
+`STATIC_KINDS` (`collected = chestOpened` / `= pickedUp`) instead of sharing
+one and hoping. Failing to read still means **"not taken"**, never "taken" —
+the other way round would empty the minimap of chests on a build where the
+model is unreachable, which is the 2.0.6 mistake in a new place.
+
+Not covered, and deliberately not faked: resource nodes, fishing spots and
+buried treasure all *respawn*, and `EPalMapObjectSpawnerState` only has
+`Init` / `WaitForLoadingAround` / `Active` — nothing that means "harvested".
+
 ## Icon audit: every marker means what it shows (2.2.16 – 2.2.18)
 
 Four kinds — egg, note, effigy and skillfruit — all drew

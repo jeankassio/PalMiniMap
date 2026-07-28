@@ -244,32 +244,6 @@ local function resourceIcon(actor)
 end
 -- ---------------------------------------------------------------
 
--- Static world objects. `collectible` marks the ones that can be picked
--- up: chests and eggs simply despawn, notes and effigies stay in the
--- world with a "already taken" flag, exactly as in 1.x.
---
--- `iconFor` is a per-ACTOR icon, for a kind whose members do not all look
--- the same. RETURNING NIL FROM IT SKIPS THE ACTOR - that is how the
--- resource scan drops the rubble it does not want out of a class it has to
--- walk anyway. Kinds without an `iconFor` keep their single ICON[kind] and
--- pay no extra reflection.
-local STATIC_KINDS = {
-    { cfg = "showChests",     class = "PalMapObjectTreasureBox",                kind = "chest",   collectible = true  },
-    { cfg = "showEggs",       class = "PalMapObjectPalEgg",                     kind = "egg",     collectible = true, iconFor = eggIcon },
-    { cfg = "showNotes",      class = "PalLevelObjectNote",                     kind = "note",    collectible = true  },
-    { cfg = "showEffigies",   class = "PalLevelObjectRelic",                    kind = "effigy",  collectible = true  },
-    { cfg = "showSkillFruit", class = "PalMapObjectSpawnerMultiItem",           kind = "fruit"    },
-    { cfg = "showFastTravel", class = "PalLevelObjectUnlockableFastTravelPoint", kind = "travel"  },
-    { cfg = "showDungeons",   class = "BP_DungeonEntrance_Base_C",              kind = "dungeon"  },
-    { cfg = "showBaseCamps",  class = "PalBuildObjectBaseCampPoint",            kind = "camp"     },
-    { cfg = "showEnemyCamps", class = "PalNPCCampSpawnerBase",                  kind = "enemy"    },
-    { cfg = "showTowers",     class = "PalBossTower",                           kind = "tower"    },
-    -- 2.2.18: things the game's own compass marks that the minimap did not.
-    { cfg = "showResources",  class = "PalMapObjectSpawnerSimple",              kind = "ore",     iconFor = resourceIcon },
-    { cfg = "showFishing",    class = "PalFishingSpotArea",                     kind = "fishing"  },
-    { cfg = "showTreasureMaps", class = "PalTreasureMapPoint",                  kind = "dig"      },
-    { cfg = "showDeaths",     class = "BP_MapObject_DeathPenaltyChest_C",       kind = "death"    },
-}
 
 local S = {
     pals = {}, players = {}, npcs = {},
@@ -362,16 +336,80 @@ local function asBool(v)
     return nil
 end
 
+-- ---------------------------------------------------------------
+-- "Has the player already taken this?"
+--
+-- THERE IS NO ONE FLAG FOR THIS, which is what 2.2.18 and everything before
+-- it assumed. `bPickedInClient` lives on `PalLevelObjectObtainable`, the
+-- base of notes and effigies ONLY - it does not exist on a chest at all, so
+-- reading it there simply raised and the answer was always "not taken".
+-- That is why looted chests stayed on the minimap.
+--
+-- A chest keeps its `bOpened` on its MODEL, not on the actor:
+--
+--     PalMapObjectTreasureBox (actor) -> .MapObjectModel
+--                                     -> PalMapObjectTreasureBoxModel.bOpened
+--
+-- Both confirmed in Palworld.usmap. Each kind therefore names its own
+-- reader in STATIC_KINDS rather than sharing one and hoping.
+--
+-- FAILING TO READ MEANS "NOT TAKEN", never "taken". Getting that backwards
+-- would empty the minimap of chests on a build where the model is not
+-- reachable, which is the 2.0.6 mistake in a new place.
+-- ---------------------------------------------------------------
 local function rawPicked(actor) return actor.bPickedInClient end
+local function rawModel(actor) return actor.MapObjectModel end
+local function rawOpened(model) return model.bOpened end
 
--- Only meaningful for notes and effigies: those stay in the world after
--- being taken, with the flag set. Chests and eggs just despawn, so they
--- disappear on their own at the next scan.
-local function alreadyCollected(actor)
+-- Notes and effigies: they stay in the world after being taken, with the
+-- flag set on the actor itself.
+local function pickedUp(actor)
     local ok, v = pcall(rawPicked, actor)
     if not ok then return false end
     return asBool(v) == true
 end
+
+-- Chests: looted ones stay in the world too - the lid is just open.
+local function chestOpened(actor)
+    local ok, model = pcall(rawModel, actor)
+    if ok and model ~= nil then
+        local got, v = pcall(rawOpened, model)
+        if got then
+            local b = asBool(v)
+            if b ~= nil then return b end
+        end
+    end
+    -- a build that will not give up the model: fall back to the actor flag
+    -- rather than deciding on nothing
+    return pickedUp(actor)
+end
+
+-- Static world objects. `collected` is the kind's own "has this been taken
+-- already?" reader - see the block above. There is no single flag for it:
+-- a chest keeps its state on its model, a note on the actor.
+--
+-- `iconFor` is a per-ACTOR icon, for a kind whose members do not all look
+-- the same. RETURNING NIL FROM IT SKIPS THE ACTOR - that is how the
+-- resource scan drops the rubble it does not want out of a class it has to
+-- walk anyway. Kinds without an `iconFor` keep their single ICON[kind] and
+-- pay no extra reflection.
+local STATIC_KINDS = {
+    { cfg = "showChests",     class = "PalMapObjectTreasureBox",                kind = "chest",   collected = chestOpened },
+    { cfg = "showEggs",       class = "PalMapObjectPalEgg",                     kind = "egg",     collected = pickedUp, iconFor = eggIcon },
+    { cfg = "showNotes",      class = "PalLevelObjectNote",                     kind = "note",    collected = pickedUp },
+    { cfg = "showEffigies",   class = "PalLevelObjectRelic",                    kind = "effigy",  collected = pickedUp },
+    { cfg = "showSkillFruit", class = "PalMapObjectSpawnerMultiItem",           kind = "fruit"    },
+    { cfg = "showFastTravel", class = "PalLevelObjectUnlockableFastTravelPoint", kind = "travel"  },
+    { cfg = "showDungeons",   class = "BP_DungeonEntrance_Base_C",              kind = "dungeon"  },
+    { cfg = "showBaseCamps",  class = "PalBuildObjectBaseCampPoint",            kind = "camp"     },
+    { cfg = "showEnemyCamps", class = "PalNPCCampSpawnerBase",                  kind = "enemy"    },
+    { cfg = "showTowers",     class = "PalBossTower",                           kind = "tower"    },
+    -- 2.2.18: things the game's own compass marks that the minimap did not.
+    { cfg = "showResources",  class = "PalMapObjectSpawnerSimple",              kind = "ore",     iconFor = resourceIcon },
+    { cfg = "showFishing",    class = "PalFishingSpotArea",                     kind = "fishing"  },
+    { cfg = "showTreasureMaps", class = "PalTreasureMapPoint",                  kind = "dig"      },
+    { cfg = "showDeaths",     class = "BP_MapObject_DeathPenaltyChest_C",       kind = "death"    },
+}
 
 local EMPTY = {}    -- shared: callers only ever read it
 
@@ -1694,8 +1732,8 @@ local function stepKind(cfg)
         local a = all[i]
         local x, y = actorLocation(a)
         if x ~= nil then
-            local skip = cfg.hideCollected and spec.collectible
-                         and alreadyCollected(a)
+            local skip = cfg.hideCollected and spec.collected ~= nil
+                         and spec.collected(a)
             -- A kind with a per-actor icon may also DECLINE an actor by
             -- returning nil - that is how the resource scan walks
             -- PalMapObjectSpawnerSimple (which it must, to find ore) and
