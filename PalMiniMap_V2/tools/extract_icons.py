@@ -79,9 +79,28 @@ WANTED = (
     # BOSS_Hunter_Rifle usa T_BOSS_NPC_Hunter), por isso a tabela do jogo e
     # decodificada abaixo para Scripts/npcicons.lua.
     re.compile(r"^Pal/Content/Pal/Texture/PalIcon/NPC/T_[^/]+$"),
-    re.compile(r"^Pal/Content/Pal/Texture/UI/InGame/T_icon_(compass|map)_[^/]+$"),
+    # (?i) de proposito: o jogo tem T_icon_Compass_Quest_0 com C MAIUSCULO, e
+    # um padrao sensivel a caixa simplesmente nao o via. Perder um icone assim
+    # e silencioso - nada falha, ele so nunca aparece na pasta.
+    re.compile(r"(?i)^Pal/Content/Pal/Texture/UI/InGame/T_icon_(compass|map)_[^/]+$"),
     re.compile(r"^Pal/Content/Pal/Texture/UI/InGame/T_prt_map_[^/]+$"),
     re.compile(r"^Pal/Content/Pal/Texture/UI/Map/T_prt_map_circle_eff$"),
+    # Ovos. O jogo NAO tem icone de bussola para ovo - a bussola do jogo base
+    # nunca marca ovos - entao os 12 icones abaixo sao os do INVENTARIO, que
+    # e onde o jogo mostra o ovo ao jogador. Um por elemento, mais o generico
+    # e o "?" desconhecido; sources.lua escolhe pelo nome da classe do ator.
+    # Note a pasta: `Pal/Content/Others/`, e nao `Pal/Content/Pal/` como todo
+    # o resto - o mesmo mount point (`/Game/`), outro ramo.
+    re.compile(r"^Pal/Content/Others/InventoryItemIcon/Texture/T_itemicon_Material_PalEgg[^/]*$"),
+    # Efigie do Lifmunk e fruta de habilidade. Pelo mesmo motivo dos ovos: o
+    # jogo nao tem glifo de bussola para nenhum dos dois, e ate 2.2.16 os dois
+    # dividiam o T_icon_compass_ClearCheck com as notas - um check generico.
+    #
+    # ARTE COLORIDA E DE PROPOSITO, e nao so por ser "a certa": os glifos
+    # brancos da bussola do jogo tem contorno fraco e SOMEM sobre neve. Medido
+    # em grama, neve e deserto a 18px, que e o tamanho real no minimapa.
+    re.compile(r"^Pal/Content/Others/InventoryItemIcon/Texture/T_itemicon_Relic$"),
+    re.compile(r"^Pal/Content/Others/InventoryItemIcon/Texture/T_itemicon_Consume_SkillCard_Neutral$"),
 )
 
 # Fora de proposito:
@@ -110,17 +129,22 @@ BULKDATA_ForceInlinePayload = 0x40
 # extracao o que a cadeia de mips faria em tempo real, e ainda corta o arquivo
 # e o custo de decodificacao em quatro.
 #
-# So os retratos. As artes de compasso ja vem pequenas do jogo, e o
+# NAO vale para tudo. As artes de compasso ja vem pequenas do jogo, e o
 # T_prt_map_circle_eff e esticado no minimapa inteiro - encolher aquele seria
 # perder resolucao de verdade.
 PORTRAIT_MAX = 64
 
 
-def is_portrait(stem: str) -> bool:
-    """Retrato de personagem: Pal ou humano. Sao os que o minimapa desenha
-    entre 10 e 40 px. Os simbolos de compasso nao entram - aqueles sao
-    desenhados como vieram."""
-    return "/PalIcon/" in stem
+def needs_downscale(stem: str) -> bool:
+    """Arte grande que o minimapa desenha entre 10 e 40 px, e que por isso
+    precisa ser reduzida na extracao - ver PORTRAIT_MAX acima.
+
+    Sao dois grupos, pelo mesmo motivo e nao por serem parecidos:
+      * retratos de personagem (/PalIcon/), 128x128 no pak;
+      * icones de ovo do inventario, 256x256 - ainda pior, porque foram
+        feitos para caber num slot de inventario e nao num marcador de mapa.
+    """
+    return "/PalIcon/" in stem or "/InventoryItemIcon/" in stem
 
 
 def pak_entries() -> list[str]:
@@ -241,7 +265,7 @@ def convert(stem: str, dest: Path) -> str | None:
                                             mip["format"], payload)))
     image.load()
     image = image.convert("RGBA")
-    if is_portrait(stem) and max(image.size) > PORTRAIT_MAX:
+    if needs_downscale(stem) and max(image.size) > PORTRAIT_MAX:
         scale = PORTRAIT_MAX / max(image.size)
         image = image.resize((max(1, round(image.width * scale)),
                               max(1, round(image.height * scale))),

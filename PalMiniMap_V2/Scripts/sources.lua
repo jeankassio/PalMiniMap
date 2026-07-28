@@ -61,6 +61,14 @@ local PAL_ICON_FMT = "/Game/Pal/Texture/PalIcon/Normal/T_%s_icon_normal.T_%s_ico
 
 local function ui(name) return UI_IN .. name .. "." .. name end
 
+-- Item icons live under Pal/Content/Others/, a different branch from
+-- everything else the mod reads, on the same /Game/ mount point. Used where
+-- the game has no compass glyph: eggs, the Lifmunk effigy, skillfruit.
+local ITEM_ICON_IN = "/Game/Others/InventoryItemIcon/Texture/"
+
+local function itemIcon(name) return ITEM_ICON_IN .. name .. "." .. name end
+
+
 local ICON = {
     player  = ui("T_icon_map_player"),
     member  = ui("T_icon_map_member"),
@@ -71,10 +79,24 @@ local ICON = {
     dungeon = ui("T_icon_compass_dungeon"),
     camp    = ui("T_icon_compass_camp"),
     enemy   = ui("T_icon_compass_EnemyCamp"),
-    egg     = ui("T_icon_compass_ClearCheck"),
-    note    = ui("T_icon_compass_ClearCheck"),
-    effigy  = ui("T_icon_compass_ClearCheck"),
-    fruit   = ui("T_icon_compass_ClearCheck"),
+    -- egg: set below, once the per-element table exists. It is the only
+    -- kind whose members do not all share one picture.
+    -- Effigy and skillfruit: the game has no compass glyph for either, so
+    -- these are its own ITEM icons - the green Lifmunk statue and a skill
+    -- fruit. Coloured art rather than a white glyph on purpose: measured at
+    -- 18 px over grass, snow and desert, the game's white compass glyphs
+    -- have a weak outline and VANISH on snow.
+    effigy  = itemIcon("T_itemicon_Relic"),
+    fruit   = itemIcon("T_itemicon_Consume_SkillCard_Neutral"),
+    -- Notes are the one marker with no game art at all. Searched: every
+    -- T_icon_compass_* (including the seventeen numbered ones, which have no
+    -- descriptive name and so escape a search by name), T_icon_Compass_Quest_*,
+    -- T_icon_ItemCategory_*, and the item icons for note/memo/paper/book/
+    -- journal/map/scroll/blueprint. The two nearest, the technology book and
+    -- the treasure map, are different items AND unreadable at 18 px. So this
+    -- one is drawn by tools/make_note_icon.py and shipped, like the circular
+    -- frame - the only marker in the mod that is not the game's own art.
+    note    = "/PalMiniMap/T_minimap_note.T_minimap_note",
 }
 
 local WHITE = { R = 1.00, G = 1.00, B = 1.00, A = 1.0 }
@@ -83,18 +105,87 @@ local TINT = {
     shiny   = { R = 1.00, G = 0.88, B = 0.30, A = 1.0 },
     player  = { R = 0.45, G = 0.78, B = 1.00, A = 1.0 },
     npc     = { R = 0.95, G = 0.85, B = 0.65, A = 1.0 },
-    egg     = { R = 1.00, G = 0.95, B = 0.75, A = 1.0 },
-    note    = { R = 0.80, G = 0.90, B = 1.00, A = 1.0 },
-    effigy  = { R = 0.70, G = 1.00, B = 0.80, A = 1.0 },
-    fruit   = { R = 1.00, G = 0.70, B = 0.85, A = 1.0 },
+    -- NO ENTRY for egg, note, effigy or fruit, deliberately. All four used to
+    -- share one generic checkmark and were told apart ONLY by these tints;
+    -- now each draws art that means what it is, and tinting coloured art
+    -- would flatten it straight back into the beige blobs it came from.
 }
+
+-- ---------------------------------------------------------------
+-- Egg icons, one per element.
+--
+-- Every egg used to draw `T_icon_compass_ClearCheck` - the same generic
+-- checkmark as notes, effigies and skillfruit, differing only by tint. The
+-- reason there was no better choice at hand: THE GAME HAS NO COMPASS ICON
+-- FOR AN EGG AT ALL, because its own compass never marks eggs. So these are
+-- the INVENTORY icons, which is where the game does show an egg to the
+-- player, and they come one per element.
+--
+-- The element is in the actor's CLASS name. The wild-egg blueprints are
+--     BP_MapObject_PickupItem_PalEgg[_<Element>]_C
+-- and `_Base` (the one that actually derives from the native
+-- PalMapObjectPalEgg the scan looks for) is the parent of the eleven
+-- variants, so FindAllOf returns all of them.
+--
+-- Mapped explicitly rather than by appending "_01" to the element: three of
+-- the twelve break that rule (the plain egg, MutationPal and Unknown have
+-- no suffix), and a generated path that is wrong lands on the silent
+-- LoadAsset fallback rather than an error.
+local EGG_ICON = {
+    [""]            = itemIcon("T_itemicon_Material_PalEgg"),
+    Base            = itemIcon("T_itemicon_Material_PalEgg"),
+    Dark            = itemIcon("T_itemicon_Material_PalEgg_Dark_01"),
+    Dragon          = itemIcon("T_itemicon_Material_PalEgg_Dragon_01"),
+    Earth           = itemIcon("T_itemicon_Material_PalEgg_Earth_01"),
+    Electricity     = itemIcon("T_itemicon_Material_PalEgg_Electricity_01"),
+    Fire            = itemIcon("T_itemicon_Material_PalEgg_Fire_01"),
+    Ice             = itemIcon("T_itemicon_Material_PalEgg_Ice_01"),
+    Leaf            = itemIcon("T_itemicon_Material_PalEgg_Leaf_01"),
+    MutationPal     = itemIcon("T_itemicon_Material_PalEgg_MutationPal"),
+    Water           = itemIcon("T_itemicon_Material_PalEgg_Water_01"),
+    WorldTree       = itemIcon("T_itemicon_Material_PalEgg_WorldTree_01"),
+}
+
+-- The grey egg with a question mark: the game's own "unidentified egg". The
+-- right answer for a class we do not recognise, and it still reads as an egg.
+local EGG_UNKNOWN = itemIcon("T_itemicon_Material_PalEgg_Unknown")
+
+-- The kind-wide fallback, used only if the per-actor lookup somehow returns
+-- nothing. Before 2.2.16 this was T_icon_compass_ClearCheck, shared with
+-- notes/effigies/fruit.
+ICON.egg = EGG_UNKNOWN
+
+local function rawClassName(actor) return actor:GetClass():GetFName():ToString() end
+
+local eggIconFor = {}     -- class name -> texture path, resolved once
+
+local function eggIcon(actor)
+    local ok, cls = pcall(rawClassName, actor)
+    if not ok or type(cls) ~= "string" then return EGG_UNKNOWN end
+    local known = eggIconFor[cls]
+    if known ~= nil then return known end
+
+    -- "" for the plain egg, "_Fire" for a fire one, nil if this is some
+    -- other class that happens to derive from PalMapObjectPalEgg.
+    local body = cls:match("^BP_MapObject_PickupItem_PalEgg(.*)_C$")
+    local element = body and (body:match("^_(.+)$") or "") or nil
+    local path = element and EGG_ICON[element] or nil
+    path = path or EGG_UNKNOWN
+    eggIconFor[cls] = path
+    return path
+end
+-- ---------------------------------------------------------------
 
 -- Static world objects. `collectible` marks the ones that can be picked
 -- up: chests and eggs simply despawn, notes and effigies stay in the
 -- world with a "already taken" flag, exactly as in 1.x.
+--
+-- `iconFor` is a per-ACTOR icon, for a kind whose members do not all look
+-- the same. Only eggs have one; everything else keeps its single ICON[kind]
+-- and pays no extra reflection.
 local STATIC_KINDS = {
     { cfg = "showChests",     class = "PalMapObjectTreasureBox",                kind = "chest",   collectible = true  },
-    { cfg = "showEggs",       class = "PalMapObjectPalEgg",                     kind = "egg",     collectible = true  },
+    { cfg = "showEggs",       class = "PalMapObjectPalEgg",                     kind = "egg",     collectible = true, iconFor = eggIcon },
     { cfg = "showNotes",      class = "PalLevelObjectNote",                     kind = "note",    collectible = true  },
     { cfg = "showEffigies",   class = "PalLevelObjectRelic",                    kind = "effigy",  collectible = true  },
     { cfg = "showSkillFruit", class = "PalMapObjectSpawnerMultiItem",           kind = "fruit"    },
@@ -737,22 +828,44 @@ end
 -- drawn on the minimap even though they were not out in the world. A pal
 -- in a sphere still has an actor - the game keeps it around rather than
 -- destroying and respawning it every time you throw one - it is simply
--- hidden and not participating in the level.
+-- not participating in the level.
 --
--- Two guarded reads, in cost order, and NEITHER may filter on a build that
+-- bIsPalActiveActor IS THE FLAG FOR THIS, specifically, and bHidden and
+-- IsDead alone do not catch it: a partner sitting in its sphere is neither
+-- bHidden nor dead, it is just inactive. The property is replicated with
+-- its own OnRep (OnRep_IsPalActiveActor, confirmed in the game's own exe)
+-- and toggled by SetActiveActor/SetActiveActorStayVisible - this is a
+-- deliberate, maintained flag, not a side effect of something else.
+--
+-- THREE guarded reads, in cost order, and NONE may filter on a build that
 -- does not expose it: an unreadable property means "no opinion", never
 -- "hide it". Getting that backwards is how 2.0.6 emptied the minimap.
---   * bHidden      - the engine's own "this actor is not being rendered".
+--   * bIsPalActiveActor - false while sitting in a sphere, whether carried
+--     in the active team or sitting in the Pal Box.
+--   * bHidden           - the engine's own "this actor is not being
+--     rendered", for whatever bIsPalActiveActor does not cover.
 --   * PalUtility::IsDead - what 1.x used; a caught or knocked-out pal
 --     lingers for a moment before the game removes it, and 1.x had a
 --     whole setting ("delay remove dead/caught pals") about that window.
 -- ---------------------------------------------------------------
+local function rawActiveActor(actor) return actor.bIsPalActiveActor end
 local function rawHidden(actor) return actor.bHidden end
 local function rawIsDead(util, actor) return util:IsDead(actor) end
 
-local hiddenReadable, deadReadable = nil, nil
+local activeReadable, hiddenReadable, deadReadable = nil, nil, nil
 
 local function inWorld(actor)
+    if activeReadable ~= false then
+        local ok, v = pcall(rawActiveActor, actor)
+        if ok then
+            activeReadable = true
+            local b = asBool(v)
+            if b == false then return false end
+        elseif activeReadable == nil then
+            activeReadable = false
+        end
+    end
+
     if hiddenReadable ~= false then
         local ok, v = pcall(rawHidden, actor)
         if ok then
@@ -764,7 +877,8 @@ local function inWorld(actor)
     end
 
     -- No latching when PalUtility is simply not in use: that is not the
-    -- property being unreadable, and bHidden alone still does its job.
+    -- property being unreadable, and the other two checks still do their
+    -- job without it.
     if deadReadable ~= false then
         local util = utility()
         if util ~= nil then
@@ -1513,6 +1627,11 @@ local function stepKind(cfg)
                 local p = list[count]          -- reused, not reallocated
                 if p == nil then p = {}; list[count] = p end
                 p.x, p.y = x, y
+                -- ALWAYS assigned, never left alone: `p` is a reused table,
+                -- so a texture set by a previous pass over a different kind
+                -- would otherwise stick to an entry that has no business
+                -- carrying one.
+                p.tex = spec.iconFor ~= nil and spec.iconFor(a) or nil
             end
         end
     end
@@ -1554,6 +1673,7 @@ local function rebuildStatic(cfg, px, py, zoom)
                         local slot = found[n]
                         if slot == nil then slot = {}; found[n] = slot end
                         slot.x, slot.y, slot.kind, slot.d = p.x, p.y, spec.kind, d
+                        slot.tex = p.tex        -- nil for every kind but eggs
                     end
                 end
             end
@@ -1574,7 +1694,7 @@ local function rebuildStatic(cfg, px, py, zoom)
         local slot = found[i]
         local o = out[i]
         if o == nil then o = {}; out[i] = o end
-        o.x, o.y, o.kind = slot.x, slot.y, slot.kind
+        o.x, o.y, o.kind, o.tex = slot.x, slot.y, slot.kind, slot.tex
     end
     for i = #out, limit + 1, -1 do out[i] = nil end
     S.staticDirty = false
@@ -1789,7 +1909,7 @@ function M.collect(cfg, px, py, zoom)
 
     for i = 1, #S.static do
         local s = S.static[i]
-        n = emit(n, s.x, s.y, ICON[s.kind] or ICON.member, isz,
+        n = emit(n, s.x, s.y, s.tex or ICON[s.kind] or ICON.member, isz,
                  TINT[s.kind] or WHITE, ICON.member, false)
     end
 
