@@ -95,11 +95,11 @@ end
 local WARMUP = 8.0
 
 local S = { scalarAt = 0.0, widgetAt = 0.0, lastScalars = "", visible = {},
-            started = false, readyAt = nil }
+            started = false, readyAt = nil, startedAt = nil }
 
 function M.forget()
     S.scalarAt, S.widgetAt, S.lastScalars, S.started = 0.0, 0.0, "", false
-    S.visible, S.readyAt = {}, nil
+    S.visible, S.readyAt, S.startedAt = {}, nil, nil
 end
 
 local function hudOf(pc)
@@ -221,10 +221,27 @@ local function visibleDiff()
     return added, removed
 end
 
+-- Even left on, this switches itself off after a few minutes. It walks the
+-- whole UObject array once a second and asks ~100 widgets for their class
+-- name; that is fine while diagnosing something and is FELT AS STUTTERING
+-- if it runs for a whole session - which is what happened after it was
+-- used to find the Esc/Tab bug. A few minutes is far more than any
+-- diagnosis needs, and config.lua stops the switch persisting at all.
+local MAX_RUN = 300.0
+
 -- `ready` is the caller's "this is a real, settled gameplay world".
 function M.tick(cfg, gs, pc, ready)
     if not cfg.logGameUiWidgets then return end
     local now = os.clock()
+
+    if S.started and S.startedAt ~= nil and (now - S.startedAt) > MAX_RUN then
+        cfg.logGameUiWidgets = false
+        guard.log("UI PROBE OFF after " .. string.format("%.0f", MAX_RUN / 60)
+            .. " minutes - it walks the whole object array every second and would "
+            .. "otherwise be felt as stuttering. Turn it back on in the F5 menu if "
+            .. "you still need it.")
+        return
+    end
 
     if not ready then S.readyAt = nil; return end
     S.readyAt = S.readyAt or (now + WARMUP)
@@ -232,6 +249,7 @@ function M.tick(cfg, gs, pc, ready)
 
     if not S.started then
         S.started = true
+        S.startedAt = now
         guard.log("UI PROBE ON. Open the Esc menu, the Tab inventory and a chest; "
             .. "every line below is a change. Turn 'Log game UI widget names' back off "
             .. "in the F5 menu afterwards - this walks the whole object array.")

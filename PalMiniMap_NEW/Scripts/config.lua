@@ -151,13 +151,25 @@ end
 -- stored file has and the defaults do not is simply not carried over, so
 -- the removed `axis` block in an older settings file is ignored on load and
 -- gone from the file after the next save. Nothing has to migrate it.
+-- KEYS THAT MUST NOT SURVIVE A SESSION.
+--
+-- `logGameUiWidgets` turns on uiprobe.lua, which walks the whole UObject
+-- array once a second and asks every widget for its class name. That is
+-- fine for the few minutes it takes to diagnose something and is felt as
+-- stuttering if it is left on - which is exactly what happened: it was
+-- switched on to find the Esc/Tab bug, the F5 menu wrote it to the
+-- settings file like any other option, and it was still on two versions
+-- later. A debug switch that costs frame time must not be able to persist
+-- silently, so it is never read from the file and never written to it.
+local SESSION_ONLY = { logGameUiWidgets = true }
+
 local function merge(stored)
     local out = {}
     for k, v in pairs(DEFAULTS) do
+        local s = (not SESSION_ONLY[k]) and stored and stored[k] or nil
         if type(v) == "table" then
             local t = {}
             for k2, v2 in pairs(v) do t[k2] = v2 end
-            local s = stored and stored[k]
             if type(s) == "table" then
                 for k2, v2 in pairs(s) do
                     if type(v2) == type(t[k2]) then t[k2] = v2 end
@@ -165,7 +177,6 @@ local function merge(stored)
             end
             out[k] = t
         else
-            local s = stored and stored[k]
             if type(s) == type(v) then out[k] = s else out[k] = v end
         end
     end
@@ -206,7 +217,19 @@ function M.get() return current or M.load() end
 
 function M.save()
     if not path or not current then return false end
-    local ok, text = pcall(json.encode, current)
+    -- Session-only keys are stripped on the way out, so a debug switch left
+    -- on cannot follow the player into the next session. See SESSION_ONLY.
+    local toWrite = current
+    for k in pairs(SESSION_ONLY) do
+        if current[k] ~= nil then
+            toWrite = {}
+            for k2, v2 in pairs(current) do
+                if not SESSION_ONLY[k2] then toWrite[k2] = v2 end
+            end
+            break
+        end
+    end
+    local ok, text = pcall(json.encode, toWrite)
     if not ok then
         guard.log("could not encode settings: " .. tostring(text))
         return false

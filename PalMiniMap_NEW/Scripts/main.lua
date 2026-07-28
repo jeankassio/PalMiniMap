@@ -1,5 +1,5 @@
 -- =====================================================================
--- PalMiniMap 2.2.12 - a native minimap for Palworld
+-- PalMiniMap 2.2.13 - a native minimap for Palworld
 --
 -- No blueprint, no .pak, no shipped assets. The whole mod is this Lua
 -- script driving UMG through UE4SS reflection, drawing the game's own
@@ -533,13 +533,21 @@ local function movementTick()
     local p = frameState
     if p == nil then return end
 
-    -- Diagnostic, off unless the user turned it on in the F5 menu. The
-    -- `ready` flag is not optional: its first version ran behind a loading
-    -- screen, walked the object array and dereferenced a half-built
-    -- widget, and Palworld died with no Lua error at all. Same gate the
-    -- actor scans use, because it is the same hazard.
-    uiprobe.tick(cfg, statics(), playerController(),
-                 settled() and not NON_GAME_WORLDS[worldName])
+    -- Diagnostic, off unless the user turned it on in the F5 menu.
+    --
+    -- The flag is tested HERE, not just inside tick(): Lua evaluates the
+    -- arguments first, so calling it unconditionally paid for statics()
+    -- and playerController() - two IsValid calls - ten times a second in
+    -- every normal session, for nothing.
+    --
+    -- The `ready` gate is not optional either: the first version of the
+    -- probe ran behind a loading screen, walked the object array and
+    -- dereferenced a half-built widget, and Palworld died with no Lua
+    -- error at all. Same gate the actor scans use; same hazard.
+    if cfg.logGameUiWidgets then
+        uiprobe.tick(cfg, statics(), playerController(),
+                     settled() and not NON_GAME_WORLDS[worldName])
+    end
 
     -- the pawn carries the component that knows whether we are in a base
     sources.updateProximity(cfg, p.x, p.y, p.pawn)
@@ -1128,4 +1136,4 @@ guard.register("pump loop", function()
     LoopAsync(PUMP_MS, guard.loopBody("pump", pump, anythingDue))
 end)
 
-guard.log("PalMiniMap 2.2.12 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
+guard.log("PalMiniMap 2.2.13 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")

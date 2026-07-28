@@ -247,6 +247,27 @@ silently fell through to widget-guessing.
 > back from `FindAllOf`, and gate anything that walks the object array on a
 > settled world.
 
+## The diagnostic must not outlive the diagnosis (2.2.13)
+
+`logGameUiWidgets` turns on `Scripts/uiprobe.lua`, which walks the whole UObject
+array once a second and asks every visible widget for its class name. That is
+the right cost for the few minutes it takes to find something and is **felt as
+stuttering** if it is left running — which is exactly what happened after it was
+used to find the Esc/Tab bug: the F5 menu wrote it to `minimap_settings.json`
+like any other option and it was still on two versions later.
+
+Three layers, so it cannot happen again:
+
+- **`config.lua` keeps a `SESSION_ONLY` set.** Those keys are never read from
+  the settings file and are stripped on save, so a debug switch cannot follow
+  the player into the next session. Any future switch that costs frame time
+  belongs there.
+- **The probe switches itself off after 5 minutes** and logs why.
+- **`main.lua` tests the flag at the call site.** Lua evaluates arguments first,
+  so `uiprobe.tick(cfg, statics(), playerController(), ...)` was paying two
+  `IsValid` calls ten times a second in every normal session even with the probe
+  off.
+
 ## "Am I in a base camp?" — ask, don't measure (2.2.4)
 
 The `autohideInBase` option hid the minimap on time but brought it back far
