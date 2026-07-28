@@ -79,6 +79,16 @@ local ICON = {
     dungeon = ui("T_icon_compass_dungeon"),
     camp    = ui("T_icon_compass_camp"),
     enemy   = ui("T_icon_compass_EnemyCamp"),
+    -- 2.2.18. The compass sheet has seventeen icons with no descriptive name
+    -- at all (T_icon_compass_00..16), which is why a search by name never
+    -- turned them up: 03 is a pickaxe, 09 an apple, 13 a lotus, 15 a fishing
+    -- rod. Those are the pictures for the resource markers below.
+    ore     = ui("T_icon_compass_03"),
+    lotus   = ui("T_icon_compass_13"),
+    forage  = ui("T_icon_compass_09"),
+    junk    = ui("T_icon_compass_Search_Junk"),
+    fishing = ui("T_icon_compass_15"),
+    dig     = ui("T_icon_compass_TreasureMap_01"),
     -- egg: set below, once the per-element table exists. It is the only
     -- kind whose members do not all share one picture.
     -- Effigy and skillfruit: the game has no compass glyph for either, so
@@ -175,14 +185,74 @@ local function eggIcon(actor)
     return path
 end
 -- ---------------------------------------------------------------
+-- Resource nodes (2.2.18)
+--
+-- Ore, stat-fruit lotuses, forageables and junk piles are ALL
+-- `PalMapObjectSpawnerSimple` subclasses, so one FindAllOf covers the lot
+-- and the class name says which is which - the same trick as the eggs:
+--
+--     BP_PalMapObjectSpawner_RockIron        -> ore
+--     BP_PalMapObjectSpawner_Lotus_HP_01_..  -> stat fruit
+--     BP_PalMapObjectSpawner_RedBerry        -> forageable
+--     BP_PalMapObjectSpawner_Junk_Grass1     -> junk
+--
+-- ONE kind, four pictures, one toggle. Splitting it into four kinds would
+-- mean four full object-array walks for one list the game already keeps
+-- together.
+--
+-- WHAT IS DELIBERATELY NOT MARKED, and why: plain stone, wood, logs and
+-- bones. There are thousands of them within minimap range in normal
+-- country, and `maxPoiIcons` is shared by distance across every kind - so
+-- marking them would push chests, dungeons and fast travel points off the
+-- map with rubble. Ore, lotuses and junk are the ones players go looking
+-- for. `showResources` also defaults to OFF for the same reason.
+local RESOURCE_RULES = {
+    -- checked in order; first match wins, so the specific ones come first
+    { pat = "Junk",        icon = "junk"   },
+    { pat = "Lotus",       icon = "lotus"  },
+    { pat = "RockIron",    icon = "ore"    },
+    { pat = "RockCopper",  icon = "ore"    },
+    { pat = "RockCoal",    icon = "ore"    },
+    { pat = "RockQuartz",  icon = "ore"    },
+    { pat = "Sulfur",      icon = "ore"    },
+    { pat = "Ore",         icon = "ore"    },   -- SkyIslandOre, WorldTreeOre
+    { pat = "Crystal",     icon = "ore"    },   -- Crystal, PalCrystal
+    { pat = "NightStone",  icon = "ore"    },
+    { pat = "Mushroom",    icon = "forage" },
+    { pat = "Berry",       icon = "forage" },
+    { pat = "Poppy",       icon = "forage" },
+    { pat = "AffectionFruit", icon = "forage" },
+}
+
+local resourceIconFor = {}    -- class name -> texture, or false for "skip"
+
+local function resourceIcon(actor)
+    local ok, cls = pcall(rawClassName, actor)
+    if not ok or type(cls) ~= "string" then return nil end
+    local known = resourceIconFor[cls]
+    if known ~= nil then return known or nil end
+
+    local pick = nil
+    for i = 1, #RESOURCE_RULES do
+        local r = RESOURCE_RULES[i]
+        if cls:find(r.pat, 1, true) then pick = ICON[r.icon]; break end
+    end
+    -- `false` and not nil: nil means "not resolved yet" to the line above,
+    -- so a class we mean to skip has to be remembered as a definite no.
+    resourceIconFor[cls] = pick or false
+    return pick
+end
+-- ---------------------------------------------------------------
 
 -- Static world objects. `collectible` marks the ones that can be picked
 -- up: chests and eggs simply despawn, notes and effigies stay in the
 -- world with a "already taken" flag, exactly as in 1.x.
 --
 -- `iconFor` is a per-ACTOR icon, for a kind whose members do not all look
--- the same. Only eggs have one; everything else keeps its single ICON[kind]
--- and pays no extra reflection.
+-- the same. RETURNING NIL FROM IT SKIPS THE ACTOR - that is how the
+-- resource scan drops the rubble it does not want out of a class it has to
+-- walk anyway. Kinds without an `iconFor` keep their single ICON[kind] and
+-- pay no extra reflection.
 local STATIC_KINDS = {
     { cfg = "showChests",     class = "PalMapObjectTreasureBox",                kind = "chest",   collectible = true  },
     { cfg = "showEggs",       class = "PalMapObjectPalEgg",                     kind = "egg",     collectible = true, iconFor = eggIcon },
@@ -194,6 +264,10 @@ local STATIC_KINDS = {
     { cfg = "showBaseCamps",  class = "PalBuildObjectBaseCampPoint",            kind = "camp"     },
     { cfg = "showEnemyCamps", class = "PalNPCCampSpawnerBase",                  kind = "enemy"    },
     { cfg = "showTowers",     class = "PalBossTower",                           kind = "tower"    },
+    -- 2.2.18: things the game's own compass marks that the minimap did not.
+    { cfg = "showResources",  class = "PalMapObjectSpawnerSimple",              kind = "ore",     iconFor = resourceIcon },
+    { cfg = "showFishing",    class = "PalFishingSpotArea",                     kind = "fishing"  },
+    { cfg = "showTreasureMaps", class = "PalTreasureMapPoint",                  kind = "dig"      },
     { cfg = "showDeaths",     class = "BP_MapObject_DeathPenaltyChest_C",       kind = "death"    },
 }
 
@@ -1622,6 +1696,15 @@ local function stepKind(cfg)
         if x ~= nil then
             local skip = cfg.hideCollected and spec.collectible
                          and alreadyCollected(a)
+            -- A kind with a per-actor icon may also DECLINE an actor by
+            -- returning nil - that is how the resource scan walks
+            -- PalMapObjectSpawnerSimple (which it must, to find ore) and
+            -- still drops the thousands of stone and wood spawners in it.
+            local tex = nil
+            if not skip and spec.iconFor ~= nil then
+                tex = spec.iconFor(a)
+                if tex == nil then skip = true end
+            end
             if not skip then
                 count = count + 1
                 local p = list[count]          -- reused, not reallocated
@@ -1631,7 +1714,7 @@ local function stepKind(cfg)
                 -- so a texture set by a previous pass over a different kind
                 -- would otherwise stick to an entry that has no business
                 -- carrying one.
-                p.tex = spec.iconFor ~= nil and spec.iconFor(a) or nil
+                p.tex = tex
             end
         end
     end

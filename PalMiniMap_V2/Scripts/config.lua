@@ -93,6 +93,14 @@ local DEFAULTS = {
     showFastTravel     = true,
     showBaseCamps      = true,
     showEnemyCamps     = true,
+
+    -- 2.2.18: things the game's own compass marks. All OFF by default -
+    -- ore and junk are numerous, and maxPoiIcons is shared by distance
+    -- across every kind, so leaving these on would crowd chests, dungeons
+    -- and fast travel points off the minimap.
+    showResources      = false,   -- ore, stat-fruit lotuses, forage, junk
+    showFishing        = false,
+    showTreasureMaps   = false,
     showDungeons       = true,
     showTowers         = true,
     showDeaths         = true,

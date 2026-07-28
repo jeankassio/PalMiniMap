@@ -304,6 +304,60 @@ they go through the same downscale-on-extract path (`needs_downscale`), for the
 same reason: an imported texture has one mip, and sampling 256 px of art into
 an 18 px marker shimmers as the map moves.
 
+## Icon audit: every marker means what it shows (2.2.16 – 2.2.18)
+
+Four kinds — egg, note, effigy and skillfruit — all drew
+`T_icon_compass_ClearCheck`, one generic checkmark, and were told apart only
+by tint. A note and an effigy were literally the same picture in two colours.
+
+| marker | now | where it came from |
+|---|---|---|
+| egg | 12 icons, one per element | the game's inventory art, picked by actor class |
+| effigy | green Lifmunk statue | `T_itemicon_Relic` |
+| skillfruit | skill fruit | `T_itemicon_Consume_SkillCard_Neutral` |
+| note | a page | **drawn by `tools/make_note_icon.py`** — see below |
+| ore / lotus / forage / junk | pickaxe, lotus, apple, scrap | `T_icon_compass_03 / 13 / 09 / Search_Junk` |
+| fishing spot | fishing rod | `T_icon_compass_15` |
+| buried treasure | shovel | `T_icon_compass_TreasureMap_01` |
+
+Everything else checked out: player, party member, death, chest, fast travel,
+tower, dungeon, base camp and enemy camp were already correct.
+
+**Two search mistakes worth recording**, because both hide assets in a way that
+looks like "the game doesn't have one":
+
+- **Seventeen compass icons have no descriptive name** — `T_icon_compass_00`
+  through `_16`. Searching by name never finds them. `03` is a pickaxe, `09` an
+  apple, `10` an egg, `13` a lotus, `15` a fishing rod. They have to be *looked
+  at*.
+- **The extraction pattern was case-sensitive**, so `T_icon_Compass_Quest_0`
+  and `_1` (capital C) were silently never extracted. The pattern is `(?i)` now.
+
+**Notes are the one marker with no game art at all.** Searched every
+`T_icon_compass_*`, `T_icon_Compass_Quest_*`, `T_icon_ItemCategory_*` and the
+item icons for note/memo/paper/book/journal/map/scroll/blueprint. The two
+nearest — the technology book and the treasure map — are different items *and*
+illegible at 18 px. So that one glyph is drawn and shipped, like the circular
+frame.
+
+**Coloured art rather than white glyphs, on evidence.** Rendered at the real
+18 px marker size over grass, snow and desert: the game's white compass glyphs
+have a weak outline and *vanish on snow*. The ones that survive (the checkmark,
+for instance) have a dark outline — so the generated note glyph has one too.
+
+### Resource nodes share one scan
+
+Ore, stat-fruit lotuses, forageables and junk are all
+`PalMapObjectSpawnerSimple` subclasses, so one `FindAllOf` covers all four and
+the class name says which is which. Returning `nil` from a kind's `iconFor`
+now **declines** the actor — which is how that scan walks the class it must
+(to find ore) while dropping the thousands of stone, wood, log and bone
+spawners mixed into it.
+
+`showResources`, `showFishing` and `showTreasureMaps` all default to **off**:
+`maxPoiIcons` is shared by distance across every kind, so leaving ore and junk
+on would push chests, dungeons and fast travel points off the minimap.
+
 ## Pals in their sphere still showed on the minimap (2.2.15)
 
 Reported: a pal travelling with the player but still stored in its sphere -
