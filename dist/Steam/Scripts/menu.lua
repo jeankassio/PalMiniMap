@@ -106,6 +106,9 @@ local LAYOUT = {
     { key = "showTowers",        label = "Show towers",              kind = "bool" },
     { key = "showBaseCamps",     label = "Show player base camps",   kind = "bool" },
     { key = "showEnemyCamps",    label = "Show enemy camps",         kind = "bool" },
+    { key = "showResources",     label = "Show ore / lotus / junk",  kind = "bool" },
+    { key = "showFishing",       label = "Show fishing spots",       kind = "bool" },
+    { key = "showTreasureMaps",  label = "Show buried treasure",     kind = "bool" },
 
     -- 1.x had a "minimap quality" slider, but what it actually changed was
     -- the scene capture's render-target resolution, and there is no scene

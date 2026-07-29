@@ -93,6 +93,14 @@ local DEFAULTS = {
     showFastTravel     = true,
     showBaseCamps      = true,
     showEnemyCamps     = true,
+
+    -- 2.2.18: things the game's own compass marks. All OFF by default -
+    -- ore and junk are numerous, and maxPoiIcons is shared by distance
+    -- across every kind, so leaving these on would crowd chests, dungeons
+    -- and fast travel points off the minimap.
+    showResources      = false,   -- ore, stat-fruit lotuses, forage, junk
+    showFishing        = false,
+    showTreasureMaps   = false,
     showDungeons       = true,
     showTowers         = true,
     showDeaths         = true,
@@ -166,7 +174,16 @@ local SESSION_ONLY = { logGameUiWidgets = true }
 local function merge(stored)
     local out = {}
     for k, v in pairs(DEFAULTS) do
-        local s = (not SESSION_ONLY[k]) and stored and stored[k] or nil
+        -- NEVER `cond and stored and stored[k] or nil` HERE. A stored value
+        -- of `false` makes that whole chain evaluate to nil, the type check
+        -- below then rejects it, and the DEFAULT is used instead - so every
+        -- toggle the player had turned OFF came back on at the next launch,
+        -- while numbers and toggles turned ON persisted fine. That is the
+        -- "my settings reset themselves" bug, and it is invisible in the
+        -- file: the JSON on disk was correct all along, the read threw it
+        -- away. Same Lua trap as the one in uiprobe.lua's `show`.
+        local s = nil
+        if stored ~= nil and not SESSION_ONLY[k] then s = stored[k] end
         if type(v) == "table" then
             local t = {}
             for k2, v2 in pairs(v) do t[k2] = v2 end
