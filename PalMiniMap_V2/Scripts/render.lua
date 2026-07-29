@@ -132,6 +132,16 @@ end
 -- asks for, and the rule that on a per-frame path it may only ever ASK:
 -- `assets.get` never blocks, and returns nil until the texture is in.
 -- ---------------------------------------------------------------
+-- Which terrain-brush setter took, logged ONCE, and whether NEITHER did.
+--
+-- DECLARED HERE, ABOVE wantsLive, ON PURPOSE. Lua resolves an undeclared
+-- name to a global, so a `local` further down the file would leave
+-- `liveBrushBroken` reading as nil in wantsLive with no warning of any
+-- kind - the same ordering trap that silently disabled the chest
+-- `collected` readers in 2.2.19.
+local brushRoute = nil
+local liveBrushBroken = false
+
 local function mapTexturePath(cfg)
     local override = cfg and cfg.terrainTexture
     if type(override) == "string" and override ~= "" then return override end
@@ -160,6 +170,7 @@ end
 local function wantsLive(cfg, x, y, zoom)
     local mode = tonumber(cfg.mapSource) or 0
     if mode == 2 then return false end
+    if liveBrushBroken then return false end
     if not capture.available() then return false end
     if mode == 1 then return true end
     if worldmap.regionContaining(x, y) == nil then return true end
@@ -243,11 +254,31 @@ local function rawSetBrushObject(w, tex) w:SetBrushResourceObject(tex) end
 
 local function setTerrainBrush(w, tex, live)
     if live then
-        if pcall(rawSetBrushObject, w, tex) then return true end
+        if pcall(rawSetBrushObject, w, tex) then
+            if brushRoute ~= "resource" then
+                brushRoute = "resource"
+                guard.log("live terrain drawn via SetBrushResourceObject")
+            end
+            return true
+        end
+        if pcall(rawSetBrush, w, tex) then
+            if brushRoute ~= "texture" then
+                brushRoute = "texture"
+                guard.log("live terrain drawn via SetBrushFromTexture "
+                    .. "(SetBrushResourceObject was refused)")
+            end
+            return true
+        end
+        if not liveBrushBroken then
+            liveBrushBroken = true
+            guard.log("neither SetBrushResourceObject nor SetBrushFromTexture "
+                .. "would take the render target, so the live terrain cannot be "
+                .. "drawn on this build; using the game's world map texture")
+        end
+        return false
     end
     if pcall(rawSetBrush, w, tex) then return true end
-    if not live then return pcall(rawSetBrushObject, w, tex) end
-    return false
+    return pcall(rawSetBrushObject, w, tex)
 end
 local function rawSetTint(w, c) w:SetColorAndOpacity(c) end
 local function rawSetVisibility(w, v) w:SetVisibility(v) end

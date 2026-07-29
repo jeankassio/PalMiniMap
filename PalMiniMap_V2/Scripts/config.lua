@@ -37,10 +37,15 @@ local DEFAULTS = {
     -- painted map shows the whole island.
     liveZoomMax        = 60000,
 
-    -- How the live render is taken.
-    --   0 flat - SCS_BaseColor: the world's own colours with no lighting,
-    --            so the minimap reads the same at midnight as at noon.
-    --   1 lit  - SCS_FinalColorLDR: exactly what the game is drawing,
+    -- How the live render is taken. Each of these is the FIRST source of a
+    -- chain, not a fixed choice: capture.lua measures what came back and
+    -- steps to the next one if it cannot be drawn (see the 2.3.1 note in
+    -- that file - `SCS_BaseColor` renders at alpha 0 on stock UE5, which
+    -- Slate draws as nothing at all).
+    --   0 flat - ask for SCS_BaseColor: the world's own colours with no
+    --            lighting, so the minimap would read the same at midnight
+    --            as at noon. EXPECT THIS TO FALL BACK to scene colour.
+    --   1 lit  - ask for SCS_FinalColorLDR: what the game is drawing,
     --            night, weather and all.
     captureStyle       = 0,
     -- How far above the player the camera sits. THIS IS WHAT MAKES CAVES

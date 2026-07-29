@@ -193,18 +193,68 @@ which only runs at load/edit time, and the live `FEngineShowFlags` is not a
 a different road — it resolves the GBuffer's base colour, so there is no
 lighting, no shadow, no fog and no night in the image. That is `captureStyle` 0.
 
-### A capture that renders nothing must not look like one that works
+### The capture worked perfectly and the minimap was blank (2.3.1)
 
-The recurring lesson in this project: a call that returns without an error is
-not proof it did anything. A component that was never registered, or a
-`CaptureSource` this build does not resolve, fills the target with the clear
-colour — and from Lua that is indistinguishable from a working capture.
+2.3.0 shipped with `CaptureSource = SCS_BaseColor`. In game the component was
+created, the target was filled, `verify()` read real colours out of it and the
+log said **`live terrain capture confirmed`** — and there was no terrain on the
+minimap at all.
 
-So three seconds after the first capture, `verify()` reads the target back at
-four spread-out points with `ReadRenderTargetPixel`. All four the clear colour
-twice running means the capture is declared blank, the mod says so in the log
-and falls back to the map texture. The readback stalls the render thread, so it
-happens **at most twice per session** and never on a schedule.
+Because the scene-capture pixel shader writes
+
+```
+SOURCE_MODE_BASE_COLOR  ->  float4(GBuffer.BaseColor, 0)
+                                                     ^^^
+```
+
+**Alpha zero.** Slate multiplies a brush by its texture's alpha, and UMG
+materials cannot be authored from Lua, so a perfectly good picture at alpha 0 is
+an invisible minimap. `SCS_SceneColorHDR` is the one mode that deliberately
+writes an opacity — `float4(SceneColor.rgb, 1 - SceneColor.a)`, which is 1 over
+anything opaque — and it is what 1.x used.
+
+The lesson is the one this mod keeps relearning, one level deeper than last
+time: **a call that returned without an error is not proof it did anything
+usable, and "there is colour in it" is not proof it can be drawn.** 2.3.0's
+verify checked the colours and never looked at the alpha, so it confirmed an
+invisible image as working.
+
+**What 2.3.1 does instead.** Each style is an *ordered chain* of sources, and
+`verify()` measures **colour and alpha**:
+
+| style | chain |
+|---|---|
+| `0` flat | `SCS_BaseColor` → `SCS_SceneColorHDR` → `SCS_FinalColorLDR` |
+| `1` lit | `SCS_FinalColorLDR` → `SCS_SceneColorHDR` → `SCS_BaseColor` |
+
+| readback | verdict |
+|---|---|
+| no colour | nothing rendered — retried once (a loading screen is black too), then the next source |
+| no alpha | rendered, but nothing Slate will draw — straight to the next source |
+| both | latched, and logged **with the pixel it was judged on** |
+
+Format follows the source, not the style, so stepping the chain rebuilds the
+render target too: `BaseColor` and `SceneColorHDR` are linear → `RTF_RGBA8_SRGB`;
+`FinalColorLDR` is already tonemapped → `RTF_RGBA8`.
+
+Chain exhausted ⇒ the mod says so and falls back to the map texture. The readback
+stalls the render thread, so it runs a handful of times at the start of a session
+and never on a schedule.
+
+> **Expect `flat` to land on scene colour in practice.** Stock UE5 hard-codes
+> alpha 0 for `SCS_BaseColor`, so the unlit look is not reachable from Lua at
+> all — the chain is what keeps that from being a blank minimap instead of a
+> lit one. The option stays because a future engine or a different source may
+> make it work.
+
+### And the other half of the same diagnosis
+
+A brush that was **never applied** looks exactly like a render target that
+renders nothing. `SetBrushFromTexture` is typed (`UTexture2D*`) and rejects a
+render target, so the live terrain must go through `SetBrushResourceObject`; if
+that were refused too, 2.3.0 had no way to say so. `render.lua` now logs which
+setter took, once, and if neither will take the target it says so and stops
+asking for the live source for the session.
 
 Everything else is logged once too: which `CreateRenderTarget2D` call shape the
 build accepted, which route created the component, which call positions it, and
@@ -230,7 +280,7 @@ reason.
 
 ### Harness
 
-`scratchpad/capturetest.py` — 33 assertions over `capture.lua` and `render.lua`'s
+`scratchpad/capturetest.py` — 39 assertions over `capture.lua` and `render.lua`'s
 geometry, with a stubbed clock. The load-bearing pair is
 **`mapModeQuadUnchanged` / `mapModeIconUnchanged`**: they recompute 2.2's UV
 arithmetic longhand and require the refactored code to put the quad and the icon
@@ -242,6 +292,11 @@ named assertion:
 | `nothrottle` | capture every tick, i.e. 1.x | `idleThrottled`, `movingThrottled` |
 | `noverify` | accept a blank render target | `blankCaught`, `blankLogged`, `stoppedAfterBlank` |
 | `noplace` | never position the camera | `cameraHeight`, `cameraLooksDown` |
+| `noalpha` | **2.3.0 exactly** — judge the colours, ignore the alpha | `alphaRejectionLogged`, `flatEndsOnSceneColour` |
+
+The fake `ReadRenderTargetPixel` models the real pixel shader — alpha 0 for
+`SCS_BaseColor`, 255 for the others — which is what makes `noalpha` reproduce
+the reported bug rather than merely fail a check.
 
 ## Where the object classes come from
 
@@ -726,20 +781,21 @@ race like the 1.x `Paldar.modconfig.json` had. Writes are atomic anyway.
 
 ## Status
 
-**2.3.0 — not yet confirmed in game.** Every call and property it uses was
-verified present in `Palworld-Win64-Shipping.exe` and `Palworld.usmap` before it
-was written, and `scratchpad/capturetest.py` passes 33 assertions against
-stubbed UE4SS globals with all three controls failing as they should — but a
-harness cannot tell you what the render target actually *looks* like. Two things
-to check on the first run, in this order:
+**2.3.0 ran in game and drew nothing** — see
+[the capture worked perfectly and the minimap was blank](#the-capture-worked-perfectly-and-the-minimap-was-blank-231).
+The component, the target, the placement and the readback were all confirmed
+correct by the log; the image was at alpha 0. **2.3.1 is the fix and is not yet
+confirmed in game.** What to check on the next run:
 
-1. `UE4SS.log` should carry `live terrain capture confirmed: ...`. If it says
-   `renders nothing` instead, the mod has already fallen back to the map texture
-   and the log names the route it tried.
-2. If the terrain looks washed out or crushed, it is the `CaptureSource` /
-   render-target format pair, which is the one thing that cannot be checked
-   without eyes — try `captureStyle` 1, and see `STYLES` at the top of
-   `capture.lua`.
+1. `UE4SS.log` should carry
+   `live terrain capture confirmed: ... via <source> [rgba r,g,b,a]`. The source
+   named there is the one that survived the chain, and the pixel is what it was
+   judged on.
+2. `live terrain drawn via SetBrushResourceObject` should be there too. If it
+   says `SetBrushFromTexture` instead, or that neither would take the target,
+   that is the other half of the problem and the log now names it.
+3. If terrain appears but looks washed out or crushed, it is the source /
+   render-target format pair — see `SOURCES` at the top of `capture.lua`.
 
 **Confirmed in game (2.0.0/2.0.1 runs):** the terrain renders, the world→map
 transform is correct, the player marker sits where it should, and the axis

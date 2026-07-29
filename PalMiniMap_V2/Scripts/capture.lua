@@ -82,6 +82,7 @@ local M = {}
 
 -- ESceneCaptureSource. Order verified against the shipping exe's string
 -- table, not assumed.
+local SCS_SCENE_COLOR_HDR = 0
 local SCS_FINAL_COLOR_LDR = 2
 local SCS_BASE_COLOR      = 7
 -- ECameraProjectionMode
@@ -95,17 +96,54 @@ local ATTACH_KEEP_RELATIVE = 0
 local CAPTURE_CLASS = "/Script/Engine.SceneCaptureComponent2D"
 local RENDER_LIB    = "/Script/Engine.Default__KismetRenderingLibrary"
 
+-- ---------------------------------------------------------------
+-- THE CAPTURE SOURCE IS PROBED, NOT CHOSEN - and 2.3.1 is why.
+--
+-- 2.3.0 asked for `SCS_BaseColor` and shipped it. In game the capture
+-- worked perfectly - the component was created, the target was filled, the
+-- readback found real colours - and the minimap showed NO TERRAIN AT ALL.
+--
+-- Because the scene-capture pixel shader writes
+--
+--     SOURCE_MODE_BASE_COLOR   ->  float4(GBuffer.BaseColor, 0)
+--                                                          ^^^
+--
+-- Alpha ZERO. Slate multiplies a brush by its texture's alpha, and UMG
+-- materials cannot be authored from Lua, so a fully transparent image is a
+-- fully invisible minimap. `SCS_SceneColorHDR` is the one mode that
+-- deliberately writes an opacity: `float4(SceneColor.rgb, 1 - SceneColor.a)`,
+-- which is 1 over anything opaque - and it is what 1.x used.
+--
+-- The lesson is the one this mod keeps relearning: A CALL THAT RETURNED
+-- WITHOUT AN ERROR IS NOT PROOF IT DID ANYTHING USABLE. 2.3.0's verify()
+-- checked the colours and never looked at the alpha, so it confirmed an
+-- invisible image as working.
+--
+-- So each style is now an ORDERED LIST of sources, and verify() measures
+-- COLOUR *AND* ALPHA and steps to the next one when what came back cannot
+-- be drawn. The winner is logged with the pixel it was judged on.
+--
 -- THE FORMAT FOLLOWS THE SOURCE, and getting the pair wrong shows up as a
--- washed-out or a crushed minimap rather than as an error.
---   * SCS_BaseColor writes LINEAR values, so the render target should be
---     sRGB: the hardware encodes on write and Slate decodes on read.
---   * SCS_FinalColorLDR has already been through the tonemapper and is
+-- washed-out or a crushed minimap rather than as an error:
+--   * BaseColor and SceneColorHDR write LINEAR values, so the target is
+--     sRGB - the hardware encodes on write and Slate decodes on read;
+--   * FinalColorLDR has already been through the tonemapper and is
 --     sRGB-encoded, so an sRGB target would encode it a second time.
+-- ---------------------------------------------------------------
+local SOURCES = {
+    [SCS_BASE_COLOR] = { format = RTF_RGBA8_SRGB,
+        name = "base colour (flat: no lighting, shadow, fog or night)" },
+    [SCS_SCENE_COLOR_HDR] = { format = RTF_RGBA8_SRGB,
+        name = "scene colour (lit, with an opacity - what 1.x used)" },
+    [SCS_FINAL_COLOR_LDR] = { format = RTF_RGBA8,
+        name = "final colour (lit, tonemapped)" },
+}
+
 local STYLES = {
-    [0] = { source = SCS_BASE_COLOR,      format = RTF_RGBA8_SRGB,
-            name = "flat (base colour, no lighting or weather)" },
-    [1] = { source = SCS_FINAL_COLOR_LDR, format = RTF_RGBA8,
-            name = "lit (the world as the game draws it)" },
+    [0] = { name = "flat", chain = { SCS_BASE_COLOR, SCS_SCENE_COLOR_HDR,
+                                     SCS_FINAL_COLOR_LDR } },
+    [1] = { name = "lit",  chain = { SCS_FINAL_COLOR_LDR, SCS_SCENE_COLOR_HDR,
+                                     SCS_BASE_COLOR } },
 }
 
 -- `mapQuality` meant "render target resolution" in 1.x and nothing at all
@@ -144,6 +182,8 @@ local S = {
     rtPx = nil,             -- resolution the current target was made at
     styleId = nil,          -- style the current component was configured for
     height = nil,           -- captureHeight the component was placed at
+    step = 1,               -- how far down the style's source chain we are
+    source = nil,           -- the ESceneCaptureSource in use right now
 
     cx = nil, cy = nil,     -- world centre of the last capture
     capW = nil,             -- world units across the last capture
@@ -261,7 +301,7 @@ local function rawSetManual(comp)
 end
 local function rawDestroy(comp) comp:K2_DestroyComponent(comp) end
 local function rawReadPixel(lib, rt, x, y) return lib:ReadRenderTargetPixel(lib, rt, x, y) end
-local function rawRGB(c) return c.R, c.G, c.B end
+local function rawRGBA(c) return c.R, c.G, c.B, c.A end
 local function rawWorldOf(actor) return actor:GetWorld() end
 
 local function renderLib()
@@ -372,6 +412,18 @@ local function styleFor(cfg)
     return id, STYLES[id]
 end
 
+-- Which CaptureSource this style is on right now, and what the render
+-- target has to be to hold it. `S.step` walks the style's chain as verify()
+-- rejects one after another.
+local function sourceFor(style)
+    local chain = style.chain
+    local step = S.step
+    if step < 1 then step = 1 end
+    if step > #chain then return nil end
+    local id = chain[step]
+    return id, SOURCES[id]
+end
+
 local function resolutionFor(cfg)
     local q = tonumber(cfg.mapQuality) or 2
     return RESOLUTION[q] or 512
@@ -383,17 +435,17 @@ local function heightFor(cfg)
     return h
 end
 
-local function configure(styleId, style, height)
+local function configure(styleId, style, source, height)
     local comp = S.comp
     guard.get(rawSetManual, comp)
-    guard.get(rawSetSource, comp, style.source)
+    guard.get(rawSetSource, comp, source)
     guard.get(rawSetOrtho, comp, 10000.0)
     guard.get(rawAbsoluteRotation, comp)
     if not pcall(rawRelativeMembers, comp, height) then
         pcall(rawRelativeAssign, comp, height)
     end
     if S.rt ~= nil then guard.get(rawSetTarget, comp, S.rt) end
-    S.styleId, S.height = styleId, height
+    S.styleId, S.height, S.source = styleId, height, source
 end
 
 -- Let go of everything. Called on a world change, on a quality change, and
@@ -403,7 +455,7 @@ local function release(destroyComponent)
         guard.get(rawDestroy, S.comp)
     end
     S.comp, S.rt = nil, nil
-    S.rtPx, S.styleId, S.height = nil, nil, nil
+    S.rtPx, S.styleId, S.height, S.source = nil, nil, nil, nil
     S.cx, S.cy, S.capW = nil, nil, nil
     S.verifyAt, S.blankStreak = nil, 0
     -- A release is a decision to rebuild NOW - a quality change, a
@@ -413,25 +465,56 @@ local function release(destroyComponent)
 end
 
 -- ---------------------------------------------------------------
--- Is the image real?
+-- Is the image DRAWABLE?
 --
--- The rule this mod keeps learning: a call shape that returns without an
--- error is not proof it did anything. A capture component that was never
--- registered, or a CaptureSource this build does not resolve, produces a
--- render target full of the clear colour - and from Lua that is
--- indistinguishable from a working capture until somebody looks at the
--- screen.
+-- Not "did the call succeed" and, since 2.3.1, not "is there colour in it"
+-- either. 2.3.0 checked the colours, found them, announced "live terrain
+-- capture confirmed" - and the minimap was blank, because
+-- `SCS_BaseColor` writes `float4(BaseColor, 0)` and Slate multiplies a
+-- brush by its texture's alpha. A perfectly good picture at alpha zero is
+-- an invisible one, and from Lua it looks identical to a working capture.
 --
 -- So a few seconds after the first capture the target is read back at four
--- spread-out points. If they are all the clear colour twice running, the
--- capture is declared blank, and the caller goes back to the world map
--- texture with a line in the log saying why.
+-- spread-out points, and BOTH halves are measured:
 --
--- `ReadRenderTargetPixel` stalls the render thread, so this happens at
--- most twice per session and never on a schedule.
+--   no colour  -> nothing rendered (a component that never registered, or
+--                 a source this build does not resolve). A load screen is
+--                 black too, so this one is retried once before it counts.
+--   no alpha   -> rendered, but nothing Slate will draw.
+--
+-- Either way the style's next source is tried, and the one that answers is
+-- logged WITH THE PIXEL IT WAS JUDGED ON - because the next time this goes
+-- wrong, that number is the whole diagnosis.
+--
+-- `ReadRenderTargetPixel` stalls the render thread, so this runs a handful
+-- of times at the start of a session and never on a schedule.
 -- ---------------------------------------------------------------
 local VERIFY_DELAY = 3.0
 local VERIFY_POINTS = { 0.30, 0.45, 0.60, 0.75 }
+local FLOOR = 2                 -- 8-bit channel value counted as "nothing"
+
+-- Give up on the current source and set up the next one in the chain.
+local function stepSource(why, sample)
+    local style = STYLES[S.styleId] or STYLES[0]
+    local from = SOURCES[S.source]
+    guard.log(string.format(
+        "live terrain capture: %s %s (%s), trying the next source",
+        from and from.name or ("source " .. tostring(S.source)), why, sample))
+    S.step = S.step + 1
+    S.blankStreak = 0
+    if S.step > #style.chain then
+        S.verified = false
+        S.unavailable = true
+        guard.log("no capture source on this build produced an image the "
+            .. "minimap can draw (component created via " .. tostring(S.route)
+            .. "); falling back to the game's world map texture. Set 'Terrain' "
+            .. "to 2 to stop retrying.")
+        release(true)
+        return
+    end
+    -- The format follows the source, so the target is rebuilt too.
+    release(true)
+end
 
 local function verify(now)
     if S.verified ~= nil or S.verifyAt == nil or now < S.verifyAt then return end
@@ -440,41 +523,56 @@ local function verify(now)
     if lib == nil or S.rt == nil or not guard.alive(S.rt) then return end
 
     local px = S.rtPx or 512
-    local lit = false
+    local bestRGB, bestA, sample = -1, -1, "?"
     for i = 1, #VERIFY_POINTS do
         local at = math.floor(px * VERIFY_POINTS[i])
         local c = guard.get(rawReadPixel, lib, S.rt, at, at)
         if c ~= nil then
-            local okc, r, g, b = pcall(rawRGB, c)
+            local okc, r, g, b, a = pcall(rawRGBA, c)
             if not okc or type(r) ~= "number" then
-                -- the readback itself is unavailable: no opinion, and never
-                -- ask again. An unreadable target must not be called blank.
+                -- The readback itself is unavailable on this build: no
+                -- opinion, and never ask again. An UNREADABLE target must
+                -- not be called blank - that would throw away a capture
+                -- that is very probably fine.
                 S.verified = true
+                guard.log("live terrain capture: the target cannot be read back "
+                    .. "on this build, so it is taken on trust")
                 return
             end
-            if r > 2 or g > 2 or b > 2 then lit = true; break end
+            if type(a) ~= "number" then a = 255 end     -- no alpha to judge
+            local rgb = math.max(r, g, b)
+            if rgb > bestRGB or a > bestA then
+                sample = string.format("rgba %d,%d,%d,%d", r, g, b, a)
+            end
+            if rgb > bestRGB then bestRGB = rgb end
+            if a > bestA then bestA = a end
+            if bestRGB > FLOOR and bestA > FLOOR then break end
         end
     end
 
-    if lit then
-        S.verified = true
-        guard.log(string.format(
-            "live terrain capture confirmed: %s, %dpx, %s", S.route or "?",
-            px, (STYLES[S.styleId] or STYLES[0]).name))
+    if bestRGB <= FLOOR then
+        -- black. A loading screen is black as well, so give it one more go
+        -- before blaming the source.
+        S.blankStreak = S.blankStreak + 1
+        if S.blankStreak < 2 then
+            S.verifyAt = now + VERIFY_DELAY
+            return
+        end
+        stepSource("rendered nothing", sample)
         return
     end
 
-    S.blankStreak = S.blankStreak + 1
-    if S.blankStreak < 2 then
-        S.verifyAt = now + VERIFY_DELAY   -- a load screen is black too
+    if bestA <= FLOOR then
+        stepSource("renders with no alpha, so Slate draws nothing", sample)
         return
     end
-    S.verified = false
-    S.unavailable = true
-    guard.log("the live terrain capture renders nothing on this build (created via "
-        .. tostring(S.route) .. "); falling back to the game's world map texture. "
-        .. "Set 'Map source' to 2 to stop retrying.")
-    release(true)
+
+    S.verified = true
+    local src = SOURCES[S.source]
+    guard.log(string.format(
+        "live terrain capture confirmed: %s, %dpx, %s style via %s [%s]",
+        S.route or "?", px, (STYLES[S.styleId] or STYLES[0]).name,
+        src and src.name or tostring(S.source), sample))
 end
 
 -- ---------------------------------------------------------------
@@ -516,8 +614,9 @@ function M.status()
     if S.unavailable then return "unavailable" end
     if S.comp == nil then return "not created" end
     if S.verified == false then return "blank" end
-    return string.format("%s, %dpx, %d captures, %.2f ms avg / %.2f ms worst",
-        tostring(S.route), S.rtPx or 0, S.captures,
+    local src = SOURCES[S.source]
+    return string.format("%s, %dpx, %s, %d captures, %.2f ms avg / %.2f ms worst",
+        tostring(S.route), S.rtPx or 0, src and src.name or "?", S.captures,
         S.captures > 0 and (S.costTotal / S.captures) * 1000.0 or 0.0,
         S.costWorst * 1000.0)
 end
@@ -530,6 +629,11 @@ function M.reconfigure(cfg)
     local styleId = styleFor(cfg)
     local height = heightFor(cfg)
     if px == S.rtPx and styleId == S.styleId and height == S.height then return end
+    if styleId ~= S.styleId then
+        -- a different style is a different chain: start it from the top,
+        -- and let it be judged again
+        S.step, S.verified, S.blankStreak = 1, nil, 0
+    end
     release(true)
 end
 
@@ -539,6 +643,7 @@ end
 function M.forget()
     release(false)
     S.tries, S.nextTryAt, S.unavailable = 0, 0.0, false
+    S.step = 1
     S.verified, S.blankStreak = nil, 0
     S.captures, S.costTotal, S.costWorst, S.reported = 0, 0.0, 0.0, false
 end
@@ -562,6 +667,8 @@ function M.update(cfg, pawn, px, py, pz, zoom, now)
     local wantPx = resolutionFor(cfg)
     local styleId, style = styleFor(cfg)
     local height = heightFor(cfg)
+    local sourceId, source = sourceFor(style)
+    if source == nil then return false end
 
     -- the component and the target both die with the pawn or the world
     if S.comp ~= nil and not guard.alive(S.comp) then release(false) end
@@ -582,7 +689,7 @@ function M.update(cfg, pawn, px, py, pz, zoom, now)
         if S.rt == nil then
             local world = guard.get(rawWorldOf, pawn)
             if world == nil then return false end
-            local rt, why = makeRenderTarget(world, wantPx, style.format)
+            local rt, why = makeRenderTarget(world, wantPx, source.format)
             if rt == nil then
                 guard.log("live terrain capture: " .. tostring(why))
                 return false
@@ -598,11 +705,12 @@ function M.update(cfg, pawn, px, py, pz, zoom, now)
             end
             S.comp, S.route = comp, route
         end
-        configure(styleId, style, height)
+        configure(styleId, style, sourceId, height)
         S.tries = 0
         S.cx, S.cy, S.capW = nil, nil, nil
         S.verifyAt = now + VERIFY_DELAY
-    elseif styleId ~= S.styleId or height ~= S.height or wantPx ~= S.rtPx then
+    elseif styleId ~= S.styleId or height ~= S.height or wantPx ~= S.rtPx
+           or sourceId ~= S.source then
         -- a setting changed under us without a menu commit (a hand-edited
         -- file, or the defaults moving); rebuild rather than drift
         release(true)
