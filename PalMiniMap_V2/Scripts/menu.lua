@@ -69,6 +69,8 @@ local LAYOUT = {
     { key = "size",              label = "Size",                     kind = "int", min = 120, max = 480 },
     { key = "opacity",           label = "Opacity",                  kind = "pct" },
     { key = "circular",          label = "Circular shape",           kind = "bool" },
+    { key = "mapSource",         label = "Terrain: 0 auto, 1 live render, 2 game map", kind = "int", min = 0, max = 2 },
+    { key = "captureStyle",      label = "Live render: 0 flat, 1 lit",  kind = "int", min = 0, max = 1 },
     { key = "mapQuality",        label = "Terrain quality (0 low - 3 sharp)", kind = "int", min = 0, max = 3 },
     { key = "zoom",              label = "Zoom (world units)",       kind = "int", min = 4000, max = 120000, step = 1000 },
     { key = "megazoom",          label = "Megazoom (F1) range",      kind = "int", min = 60000, max = 500000, step = 10000 },
@@ -110,16 +112,21 @@ local LAYOUT = {
     { key = "showFishing",       label = "Show fishing spots",       kind = "bool" },
     { key = "showTreasureMaps",  label = "Show buried treasure",     kind = "bool" },
 
-    -- 1.x had a "minimap quality" slider, but what it actually changed was
-    -- the scene capture's render-target resolution, and there is no scene
-    -- capture in 2.x - the terrain is the game's own map texture, drawn as
-    -- one quad, so there is no resolution to trade away. These three are
-    -- the real performance knobs now: how often the icons are repositioned,
-    -- how often the world is rescanned, and how many icons may exist.
-    -- 50 ms is the floor on purpose: the single game-thread pump ticks at
-    -- 33 ms, so anything below that only adds dispatches without adding
-    -- frames. See the threading note at the top of main.lua.
+    -- 1.x's "minimap quality" slider set the scene capture's render-target
+    -- resolution. 2.0-2.2 had no capture, so `mapQuality` only chose a mip;
+    -- with the second render back in 2.3 it means both again (see
+    -- config.lua). The knobs below are the ones that cost frame time
+    -- rather than image quality: how often the world is re-rendered, how
+    -- often the icons are repositioned, how often the world is rescanned,
+    -- and how many icons may exist.
+    -- 50 ms is the floor on the update rate on purpose: the single
+    -- game-thread pump ticks at 33 ms, so anything below that only adds
+    -- dispatches without adding frames. See the threading note at the top
+    -- of main.lua.
     { header = "Performance" },
+    { key = "captureIntervalMs", label = "Re-render terrain every (ms)", kind = "int", min = 100, max = 2000, step = 50 },
+    { key = "captureHeight",     label = "Camera height above player",  kind = "int", min = 200, max = 20000, step = 100 },
+    { key = "liveZoomMax",       label = "Auto: live render up to zoom", kind = "int", min = 4000, max = 260000, step = 2000 },
     { key = "moveIntervalMs",    label = "Update rate (ms, lower = smoother)", kind = "int", min = 50, max = 500, step = 5 },
     { key = "scanIntervalMs",    label = "Rescan world every (ms)",  kind = "int", min = 1000, max = 20000, step = 500 },
     { key = "maxPoiIcons",       label = "Max point-of-interest icons", kind = "int", min = 8, max = 128 },

@@ -285,6 +285,23 @@ local function actorLocation(actor)
 end
 M.actorLocation = actorLocation
 
+-- Height as well, for the ONE actor that needs it: the live terrain
+-- capture has to know how high to put its camera (capture.lua). Kept
+-- separate from actorLocation rather than added to it because that one is
+-- called for hundreds of actors a scan and every extra field read is paid
+-- by all of them.
+local function rawLocationZ(actor)
+    local loc = actor:K2_GetActorLocation()
+    return loc.X, loc.Y, loc.Z
+end
+
+function M.actorLocation3(actor)
+    if not guard.alive(actor) then return nil end
+    local ok, x, y, z = pcall(rawLocationZ, actor)
+    if not ok or type(x) ~= "number" or type(y) ~= "number" then return nil end
+    return x, y, (type(z) == "number") and z or 0.0
+end
+
 local function rawName(actor) return actor:GetFName():ToString() end
 
 local function actorName(actor)

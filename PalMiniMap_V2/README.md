@@ -1,7 +1,9 @@
-# PalMiniMap 2.2 — native minimap for Palworld
+# PalMiniMap 2.3 — native minimap for Palworld
 
 A complete rewrite. No blueprint, **no `.pak`** — the whole mod is UE4SS Lua
-driving UMG, drawing the game's own world map texture. Since 2.2.0 the icons
+driving UMG. Since **2.3.0** the terrain is a **second, throttled render of the
+world from above** ([why](#the-terrain-is-rendered-again-230)), with the game's
+own world map texture kept for the zoomed-right-out view. Since 2.2.0 the icons
 are shipped as loose PNG in `icons/`, and since 2.2.1 that set is **restyled
 art** (rounded, one consistent look) rather than a copy of the game's — so the
 files always win over whatever the game has in memory. See
@@ -25,13 +27,16 @@ had came from two decisions inside that blueprint:
    crashes — v1.2.2 from destroying an icon twice, v1.2.6 from walking icon
    arrays while a fast travel tore down the streaming sublevels underneath.
 
-Version 2 has neither mechanism, so neither class of bug can occur.
+Version 2 has neither mechanism. **2.3 brings the scene capture back, and only
+the scene capture** — throttled to a few renders a second, stopped entirely
+while the minimap is hidden, and never every frame. The icons stay pooled UMG
+widgets; nothing is attached to a world actor.
 
 ## How it works
 
-| concern | 1.x | 2.0 |
+| concern | 1.x | 2.3 |
 |---|---|---|
-| terrain | scene capture, every frame | game's `T_WorldMap` texture, one quad |
+| terrain | scene capture, **every frame**, always on | scene capture, **≤4/s**, only while visible — plus `T_WorldMap` when zoomed out |
 | icons | `StaticMeshComponent` attached to actors | pooled UMG `Image` widgets |
 | icon lifetime | created/destroyed constantly | fixed pool, allocated once, reused |
 | update rate | per frame | 10 Hz movement, 0.25 Hz pal scan, 15 s static scan |
@@ -103,12 +108,140 @@ machinery version 2 no longer has:
 | Show lifmunk effigies | yes |
 | Rescan frequency | yes — one control instead of five |
 | Keybinds F1–F5 | yes, same layout |
-| Minimap render resolution | **gone** — configured the scene capture; the nearest equivalent is the new *Terrain quality*, which controls mip residency instead |
-| Minimap capture LOD bias | **gone** — same reason |
+| Minimap render resolution | **back in 2.3** — *Terrain quality* is the render target's resolution again (256 / 384 / 512 / 768 px), and still chooses the map texture's mip when that source is in use |
+| Minimap capture LOD bias | **gone** — the capture is orthographic and small, so there is nothing to bias |
 | Edit mode "new size method" | **gone** — `+`/`-` always resize in edit mode |
 
 Two rows are new: **map orientation** (the escape hatch described below)
 and a single **rescan interval** replacing 1.x's five separate ones.
+
+## The terrain is rendered again (2.3.0)
+
+**The problem.** Up to 2.2.20 the terrain was the game's own
+`/Game/Pal/Texture/UI/Map/T_WorldMap` drawn as one quad. That texture is a
+painting of the main island and nothing else, so:
+
+* **the great tree at the edge of the world** and everything out past the mapped
+  bounds had no terrain at all;
+* **every dungeon** showed a piece of coastline the player was nowhere near —
+  `worldmap.regionFor()` fell back to the main island rather than admit the
+  point was off the map.
+
+No coordinate work fixes that. The information is not in the image.
+
+**What replaced it.** `capture.lua` puts a `USceneCaptureComponent2D` on the
+player's pawn, pointing straight down through an **orthographic** projection
+into a render target, and the minimap draws that. It works wherever the player
+can stand, because it is a picture of what is actually there.
+
+### This is the thing 2.0 was written to remove — here is what is different
+
+| | 1.x | 2.3 |
+|---|---|---|
+| `bCaptureEveryFrame` | **true** (60+ renders/s, forever) | **false**, `CaptureScene()` called by hand |
+| minimap hidden | still rendering | nothing captured at all |
+| standing still | still rendering | one refresh every 4 s |
+| running | still rendering | when the view has slid 4 % of the captured width, at most every `captureIntervalMs` |
+| target size | whatever the slider said | 256–768 px square, from *Terrain quality* |
+| icons | `StaticMeshComponent` attached to actors | unchanged from 2.x: pooled UMG images |
+
+Ten seconds of running costs about six renders. 1.x would have spent six hundred.
+
+### Three settings, and what they actually do
+
+| setting | meaning |
+|---|---|
+| **Terrain** (`mapSource`) | `0` auto (default), `1` always the live render, `2` always the game's map texture — i.e. 2.2 behaviour |
+| **Live render** (`captureStyle`) | `0` flat — `SCS_BaseColor`, the world's own colours with no lighting, so the map reads the same at midnight as at noon. `1` lit — `SCS_FinalColorLDR`, exactly what the game is drawing |
+| **Camera height** (`captureHeight`) | how far above the player the camera sits, default 1500 uu |
+
+**Why `auto` is the default, and it is not a hedge:** the live render can only
+show what the game has **streamed in**. Megazoom is 260 000 world units across —
+more than two kilometres — and most of that is not loaded, so the capture comes
+back empty where the painted map shows the whole island. So auto uses the live
+render up close, the texture past `liveZoomMax` (60 000), and the live render
+**regardless of zoom** wherever `worldmap.regionContaining()` says the painted
+map has no coverage. That last clause is the dungeon case.
+
+### Why the camera is low, and why dungeons work
+
+An orthographic camera does not render what is behind it, so a cave roof or a
+building's ceiling above `captureHeight` is simply **not in the picture**, and
+the floor the player is standing on is. Orthographic also means the height does
+not change the scale — only what gets clipped — so a low camera costs no detail.
+
+### Orientation is not a guess
+
+A capture rotated `(Pitch = -90, Yaw = 0, Roll = 0)` has screen-right = world
+**+Y** and screen-up = world **+X**. That is exactly the convention
+`worldmap.lua` confirmed in game for the map texture (`toUV` takes u from world
+Y and v from -world X), so the live image drops into the coordinate frame the
+icons already use. 2.3 went further and put **both** sources and every icon on
+one number — `k = size / zoom`, screen pixels per world unit — which is the same
+arithmetic the UV path was doing and is correct in a dungeon, where there is no
+region to normalise against.
+
+### What could not be carried over from 1.x
+
+1.x's capture component had a baked `ShowFlagSettings` array turning off 32
+things (`Lighting`, `Fog`, `DynamicShadows`, `InstancedFoliage`, …) — that is how
+it got a flat, daylight map. Show flags are applied by `UpdateShowFlags()`,
+which only runs at load/edit time, and the live `FEngineShowFlags` is not a
+`UPROPERTY`: **from Lua there is no way to touch them at all.**
+
+`CaptureSource` *is* a `UPROPERTY`, and `SCS_BaseColor` reaches the same place by
+a different road — it resolves the GBuffer's base colour, so there is no
+lighting, no shadow, no fog and no night in the image. That is `captureStyle` 0.
+
+### A capture that renders nothing must not look like one that works
+
+The recurring lesson in this project: a call that returns without an error is
+not proof it did anything. A component that was never registered, or a
+`CaptureSource` this build does not resolve, fills the target with the clear
+colour — and from Lua that is indistinguishable from a working capture.
+
+So three seconds after the first capture, `verify()` reads the target back at
+four spread-out points with `ReadRenderTargetPixel`. All four the clear colour
+twice running means the capture is declared blank, the mod says so in the log
+and falls back to the map texture. The readback stalls the render thread, so it
+happens **at most twice per session** and never on a schedule.
+
+Everything else is logged once too: which `CreateRenderTarget2D` call shape the
+build accepted, which route created the component, which call positions it, and
+`capture.status()` after 40 captures — average and worst-case milliseconds. That
+line is the only way to know whether the second render is affordable on a given
+machine.
+
+### Reachability, checked before it was written
+
+Everything this needs was confirmed present in `Palworld-Win64-Shipping.exe` and
+in `Palworld.usmap` before a line of it existed: `AddComponentByClass`,
+`CaptureScene`, `CreateRenderTarget2D`, `ReadRenderTargetPixel`,
+`SetBrushResourceObject`, `K2_SetWorldLocationAndRotation`, and every property on
+`SceneCaptureComponent2D` / `SceneCaptureComponent` / `TextureRenderTarget2D`.
+`RegisterComponent` is **not** in the exe — it is not a `UFUNCTION` — which is
+why `AddComponentByClass` is the creation route: it is the only call that both
+constructs and registers.
+
+`SetBrushFromTexture` takes a `UTexture2D` and a render target is not one, so the
+live terrain goes on the brush through `SetBrushResourceObject`. The test
+harness's fake `SetBrushFromTexture` raises on a render target for exactly this
+reason.
+
+### Harness
+
+`scratchpad/capturetest.py` — 33 assertions over `capture.lua` and `render.lua`'s
+geometry, with a stubbed clock. The load-bearing pair is
+**`mapModeQuadUnchanged` / `mapModeIconUnchanged`**: they recompute 2.2's UV
+arithmetic longhand and require the refactored code to put the quad and the icon
+in the same place to a hundredth of a pixel. Three controls, each breaking a
+named assertion:
+
+| control | what it reverts | fails |
+|---|---|---|
+| `nothrottle` | capture every tick, i.e. 1.x | `idleThrottled`, `movingThrottled` |
+| `noverify` | accept a blank render target | `blankCaught`, `blankLogged`, `stoppedAfterBlank` |
+| `noplace` | never position the camera | `cameraHeight`, `cameraLooksDown` |
 
 ## Where the object classes come from
 
@@ -592,6 +725,21 @@ JSON owned by this mod — nothing else reads it, so there is no half-written-fi
 race like the 1.x `Paldar.modconfig.json` had. Writes are atomic anyway.
 
 ## Status
+
+**2.3.0 — not yet confirmed in game.** Every call and property it uses was
+verified present in `Palworld-Win64-Shipping.exe` and `Palworld.usmap` before it
+was written, and `scratchpad/capturetest.py` passes 33 assertions against
+stubbed UE4SS globals with all three controls failing as they should — but a
+harness cannot tell you what the render target actually *looks* like. Two things
+to check on the first run, in this order:
+
+1. `UE4SS.log` should carry `live terrain capture confirmed: ...`. If it says
+   `renders nothing` instead, the mod has already fallen back to the map texture
+   and the log names the route it tried.
+2. If the terrain looks washed out or crushed, it is the `CaptureSource` /
+   render-target format pair, which is the one thing that cannot be checked
+   without eyes — try `captureStyle` 1, and see `STYLES` at the top of
+   `capture.lua`.
 
 **Confirmed in game (2.0.0/2.0.1 runs):** the terrain renders, the world→map
 transform is correct, the player marker sits where it should, and the axis

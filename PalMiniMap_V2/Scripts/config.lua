@@ -23,13 +23,45 @@ local DEFAULTS = {
     opacity            = 0.92,
     circular           = false,
 
-    -- Terrain sharpness. The map is the game's own texture magnified, so
-    -- the only thing that decides how sharp it looks is which mip level
-    -- the streamer keeps resident - see tune() in assets.lua.
-    --   0 leave the streamer alone (lowest VRAM, softest terrain)
-    --   1 keep the world map texture fully resident
-    --   2 same as 1 today (see below)
-    --   3 ...plus trilinear filtering and no streaming mip bias
+    -- WHERE THE TERRAIN COMES FROM (2.3.0).
+    --   0 auto  - the live render up close, the game's map texture when
+    --             zoomed out past `liveZoomMax`, and the live render
+    --             wherever the map texture has no coverage at all (every
+    --             dungeon, the far edges of the world). See render.lua.
+    --   1 live  - always the second render.
+    --   2 map   - always the game's world map texture, i.e. 2.0-2.2.
+    mapSource          = 0,
+    -- Above this zoom, `auto` stops asking for a live render: past a
+    -- couple of kilometres across, most of what should be in frame has not
+    -- been streamed in, so the capture would show empty ground where the
+    -- painted map shows the whole island.
+    liveZoomMax        = 60000,
+
+    -- How the live render is taken.
+    --   0 flat - SCS_BaseColor: the world's own colours with no lighting,
+    --            so the minimap reads the same at midnight as at noon.
+    --   1 lit  - SCS_FinalColorLDR: exactly what the game is drawing,
+    --            night, weather and all.
+    captureStyle       = 0,
+    -- How far above the player the camera sits. THIS IS WHAT MAKES CAVES
+    -- WORK: an orthographic camera does not render what is behind it, so
+    -- the ceiling above this height is simply not in the picture. It does
+    -- NOT change the scale - orthographic - only what gets clipped away.
+    captureHeight      = 1500,
+    -- How often the second render runs, at most. 250 ms is four renders a
+    -- second; 1.x did sixty. Raise it if the GPU is the bottleneck.
+    captureIntervalMs  = 250,
+
+    -- Terrain sharpness, and it means two things because there are two
+    -- terrain sources:
+    --   live render - the render target's resolution: 256 / 384 / 512 /
+    --                 768 px square for levels 0..3. This is what the
+    --                 setting meant in 1.x.
+    --   map texture - which mip the streamer keeps resident, since that
+    --                 image is magnified several times across the window:
+    --                 0 leave the streamer alone (softest), 1-2 keep it
+    --                 fully resident, 3 plus trilinear and no mip bias.
+    --                 See tune() in assets.lua.
     --
     -- 2 used to force every ICON's full mip chain resident as well. That
     -- was a mistake: icons are drawn at eighteen pixels, so those mips are
@@ -39,6 +71,7 @@ local DEFAULTS = {
     mapQuality         = 2,
     -- Escape hatch: point this at a different map asset if a game update
     -- ever ships a more detailed one. Empty = the stock T_WorldMap.
+    -- Affects the map-texture source only.
     terrainTexture     = "",
 
     -- how much of the world the window shows, in world units across
