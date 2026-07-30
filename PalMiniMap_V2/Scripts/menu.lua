@@ -20,6 +20,7 @@
 -- =====================================================================
 
 local guard = require("guard")
+local i18n = require("i18n")
 
 local M = {}
 
@@ -69,7 +70,7 @@ local LAYOUT = {
     { key = "size",              label = "Size",                     kind = "int", min = 120, max = 480 },
     { key = "opacity",           label = "Opacity",                  kind = "pct" },
     { key = "circular",          label = "Circular shape",           kind = "bool" },
-    { key = "mapSource",         label = "Terrain: 0 auto, 1 live render, 2 game map", kind = "int", min = 0, max = 2 },
+    { key = "liveTerrain",       label = "Live render",              kind = "bool" },
     { key = "captureStyle",      label = "Live render: 0 lit, 1 flat (may fall back)", kind = "int", min = 0, max = 1 },
     { key = "mapQuality",        label = "Terrain quality (0 low - 3 sharp)", kind = "int", min = 0, max = 3 },
     { key = "zoom",              label = "Zoom (world units)",       kind = "int", min = 4000, max = 120000, step = 1000 },
@@ -92,6 +93,7 @@ local LAYOUT = {
     { key = "showPlayers",       label = "Show other players",       kind = "bool" },
     { key = "showNPCs",          label = "Show NPC humans",          kind = "bool" },
     { key = "maxNpcIcons",       label = "Max NPC icons",            kind = "int", min = 0, max = 64 },
+    { key = "maxPlayerIcons",    label = "Max other-player icons",   kind = "int", min = 0, max = 64 },
     { key = "showDeaths",        label = "Show death locations",     kind = "bool" },
 
     { header = "Items" },
@@ -275,7 +277,7 @@ end
 local function buildRow(scroll, item, cfg)
     local row = make("/Script/UMG.HorizontalBox")
     if row == nil then return end
-    local lbl = text(item.label, 14, UI.text, 0)
+    local lbl = text(i18n.t(item.label), 14, UI.text, 0)
     local lblSlot = guard.get(function() return row:AddChild(lbl) end)
     fill(lblSlot); align(lblSlot, nil, 2)
 
@@ -404,7 +406,8 @@ function M.build(pc, cfg)
         if vbox ~= nil then
             guard.get(function() head:AddChild(vbox) end)
             guard.get(function() vbox:AddChild(text("PalMiniMap 2", 24, UI.accent, 0)) end)
-            guard.get(function() vbox:AddChild(text("[F5] close  [F1] megazoom  [F2] corner  [F3] show/hide  [F4] edit  [+/-] zoom",
+            guard.get(function() vbox:AddChild(text(i18n.t(
+                "[F5] close  [F1] megazoom  [F2] corner  [F3] show/hide  [F4] edit  [+/-] zoom"),
                                                     11, UI.muted, 0)) end)
         end
         pad(guard.get(function() return scroll:AddChild(head) end), 0, 0, 0, 8)
@@ -416,7 +419,8 @@ function M.build(pc, cfg)
         guard.try("menu row '" .. tostring(item.header or item.key) .. "'", function()
             if item.header then
                 pad(guard.get(function()
-                    return scroll:AddChild(text(string.upper(item.header), 13, UI.accent, 0))
+                    return scroll:AddChild(
+                        text(i18n.upper(i18n.t(item.header)), 13, UI.accent, 0))
                 end), 2, 14, 2, 5)
             else
                 buildRow(scroll, item, cfg)
@@ -425,7 +429,8 @@ function M.build(pc, cfg)
     end
 
     pad(guard.get(function()
-        return scroll:AddChild(text("Changes save and apply instantly.", 12, UI.muted, 1))
+        return scroll:AddChild(
+            text(i18n.t("Changes save and apply instantly."), 12, UI.muted, 1))
     end), 6, 14, 6, 10)
     return true
 end
@@ -491,6 +496,12 @@ function M.open(cfg, worldName)
         guard.log("menu not opened: no player controller")
         return
     end
+    -- Ask the game what language it is in, every open rather than once a
+    -- session: it is a name lookup and one static getter, and doing it
+    -- here means changing the language in the game's own options is
+    -- picked up without restarting. Never fatal - untranslated is English.
+    guard.try("menu language", function() i18n.refresh(cfg.menuLanguage) end)
+
     local ok = guard.try("buildMenu", function()
         if not M.build(pc, cfg) then error("could not build the menu widget") end
         guard.get(function() S.widget:AddToViewport(99) end)

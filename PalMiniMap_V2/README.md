@@ -79,6 +79,30 @@ corrects itself if a game update moves the world.
 
 Same layout as 1.x, deliberately.
 
+### The menu follows the game's language (2.3.3)
+
+The `F5` menu is drawn in whatever language Palworld itself is set to —
+Portuguese if the game is in Portuguese, English otherwise. It is asked, not
+guessed: Palworld drives UE's own localisation system (every string is an
+`FText`, and `SetCurrentCulture` is in the shipping exe), so
+`KismetInternationalizationLibrary.GetCurrentLanguage()` on the CDO is the
+answer, with `GetCurrentCulture` / `GetCurrentLocale` behind it and the
+winner logged once. All four names were confirmed present in the exe before
+any of it was written.
+
+The game's *own* `EPalLanguageType` was the obvious first idea and is a dead
+end: nothing reachable exposes its live value, its option lives in a save
+object rather than a config file, and `GameUserSettings.ini` on this build has
+no `[Internationalization] Culture=` line to read either.
+
+The lookup key is **the English string itself**, so `menu.lua`'s `LAYOUT` is
+untouched and anything with no translation falls back to English instead of
+showing a blank row — a new option is at worst untranslated, never broken.
+Adding a language is one more table in `i18n.lua`. `config.menuLanguage`
+forces one (`"pt-BR"`, `"en"`) if the detection is ever wrong; it has no menu
+row on purpose. Section headers go through `i18n.upper`, because Lua's
+`string.upper` is byte-wise and would render `Diagnóstico` as `DIAGNóSTICO`.
+
 ## Feature parity with 1.x
 
 Everything the 1.x menu offered, except the options that configured
@@ -151,17 +175,20 @@ Ten seconds of running costs about six renders. 1.x would have spent six hundred
 
 | setting | meaning |
 |---|---|
-| **Terrain** (`mapSource`) | `0` auto (default), `1` always the live render, `2` always the game's map texture — i.e. 2.2 behaviour |
-| **Live render** (`captureStyle`) | `0` flat — `SCS_BaseColor`, the world's own colours with no lighting, so the map reads the same at midnight as at noon. `1` lit — `SCS_FinalColorLDR`, exactly what the game is drawing |
+| **Live render** (`liveTerrain`) | ticked (default) — the terrain is a second, throttled render of the world from above. Unticked — the game's own world map texture, i.e. 2.2 behaviour |
+| **Live render style** (`captureStyle`) | `0` lit — `SCS_SceneColorSceneDepth`, the world as it is lit right now, and **the only capture source that comes back opaque**. `1` flat — asks for `SCS_BaseColor` (no lighting at all) and falls back to `0` on any build that renders it at alpha 0, which is stock Palworld |
 | **Camera height** (`captureHeight`) | how far above the player the camera sits, default 1500 uu |
 
-**Why `auto` is the default, and it is not a hedge:** the live render can only
-show what the game has **streamed in**. Megazoom is 260 000 world units across —
-more than two kilometres — and most of that is not loaded, so the capture comes
-back empty where the painted map shows the whole island. So auto uses the live
-render up close, the texture past `liveZoomMax` (60 000), and the live render
-**regardless of zoom** wherever `worldmap.regionContaining()` says the painted
-map has no coverage. That last clause is the dungeon case.
+**The one thing the checkbox does not override, and it is not a hedge:** the
+live render can only show what the game has **streamed in**. Megazoom is 260 000
+world units across — more than two kilometres — and most of that is not loaded,
+so the capture comes back empty where the painted map shows the whole island. So
+above `liveZoomMax` (60 000) the terrain falls back to the texture even with the
+box ticked; raise that setting to `megazoom` if you would rather always have the
+live render. The exception to the exception: wherever
+`worldmap.regionContaining()` says the painted map has no coverage at all, the
+live render is used **regardless of zoom**, because a mostly-empty capture still
+beats a picture of the wrong place. That last clause is the dungeon case.
 
 ### Why the camera is low, and why dungeons work
 
@@ -367,8 +394,74 @@ alternatives were tried first and are worse: letting them take `maxPalIcons`
 too overflows the icon pool, so the draw loop drops whatever was emitted last
 — always the NPCs, silently; and *sharing* `maxPalIcons` means anywhere with
 48 pals in range shows no people at all, since pals are collected first.
-`poolCapacity` sums all three budgets, and `needsRebuild` compares that sum,
-so a new budget key becomes a rebuild key for free.
+`poolCapacity` sums the budgets, and `needsRebuild` compares that sum, so a
+new budget key becomes a rebuild key for free.
+
+**And that sum was missing a term until 2.3.3.** Other players were the one
+list with no budget at all, and `poolCapacity` did not count them — while
+`collect()` emits them *after* statics and pals but *before* humans. So on a
+populated server every extra player pushed an NPC off the end of the pool, by
+exactly the mechanism described above, without a word in the log. It survived
+this long because in singleplayer the list is always **empty**: the local
+player is excluded by name, so there is nothing in it to overflow with. Now
+`maxPlayerIcons` (default 16) bounds it and is counted in the pool. The
+exclusion bookkeeping stays outside the budget — it is what stops a player
+being counted as a pal, and must not depend on whether an icon was spare.
+
+## Friends showed up as human NPCs on a server (2.3.3)
+
+Reported against 2.1.2 on multiplayer: *"with 'show NPC humans' on, my friends
+at the base appear as human NPC icons if I have 'show other players' off — and
+it seems only some of them are."*
+
+Pal-versus-human is decided by **whether the tribe has a species icon** (2.1.0).
+A player's actor name gives a tribe like `PlayerBase`, which of course has no
+`T_PlayerBase_icon_normal`, so **any player that is not in the `excluded` set is
+classified as a human and drawn as one.** Everything therefore rested on that
+one set — built by NAME, from a separate `FindAllOf` — and it silently yields no
+exclusions at all if the name read fails, if the player list comes back empty,
+or if `usableForExclusion` decides the class looks like a superclass of pals.
+"Only some" is the `maxNpcIcons` budget downstream: it is filled nearest-first,
+so the closest friends got icons and the rest were dropped entirely.
+
+The fix is **a second, independent test on a different property — the actor's
+CLASS.** Class names are *learned*, not hard-coded, because they are blueprints
+(`BP_PlayerBase_C`, `BP_Player_Female_C`) that live in the pak rather than the
+exe; and the first source of them cannot fail, because the **local player's own
+pawn is a player character** and we always have it. Cost is kept off the hot
+path: the class is only read for an actor that has already failed the species
+test (few) or during the brief window before any icon has resolved, never for
+every pal in range.
+
+## Every pal variant wears its own species portrait (2.3.3)
+
+Counted against the shipping pak: **457 Pal blueprints have no
+`T_<tribe>_icon_normal` of their own, and 431 of them have a base species that
+does.** 2.1.4 fell back to the base species for a `_BOSS` suffix only —
+deliberately, since dropping *any* trailing segment would send every human tribe
+chasing assets that never existed (`NPC_Villager` → `NPC`). That reached 286 of
+the 457. The other **145** — every `_Predator`, `_Normal`, `_Skin001`, `_GYM`,
+`_Oilrig`, `_RAID`, `_Quest` and elemental re-skin — failed the species test,
+and failing it is exactly what marks an actor as human. They were drawn with the
+NPC marker.
+
+2.3.3 keeps 2.1.4's guarantee with a **whitelist of variant suffixes derived by
+walking the pak index**, stripped repeatedly (`AmaterasuWolf_Dark_BOSS` needs two
+passes). Three things were measured rather than assumed:
+
+- stripping to the **full** base and stopping at the first **intermediate** that
+  has an icon resolve identically (430 each), and there is not one case where the
+  intermediate wins — so the simpler rule is the correct one;
+- of the **674** human CharacterIDs in `npcicons.lua` and the **249** NPC
+  blueprints in the pak, **zero** become pals under the new rule, which is the
+  2.0.8 regression this whitelist exists to avoid;
+- the exact tribe is still probed **first**, because some variants genuinely do
+  have their own row (`FlameBuffalo_Ice`) and must keep their own picture.
+
+Twenty-six variants remain unreachable because no base portrait exists anywhere
+— `ElecLion` and `DarkMutant` among them, whose rows in the game's own icon data
+table point at textures that are not in the pak at all. Nothing can be drawn for
+those but the generic marker.
 
 ## Hiding behind the game's own screens (2.2.11)
 

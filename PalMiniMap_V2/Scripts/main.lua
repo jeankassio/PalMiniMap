@@ -1,5 +1,5 @@
 -- =====================================================================
--- PalMiniMap 2.3.2 - a native minimap for Palworld
+-- PalMiniMap 2.3.3 - a native minimap for Palworld
 --
 -- No blueprint, no .pak, no cooked content. The whole mod is this Lua
 -- script driving UMG through UE4SS reflection. Since 2.3 the terrain is a
@@ -605,7 +605,7 @@ local function movementTick()
     -- same mistake 2.0.5 made by skipping the whole draw. A teleport is a
     -- huge jump, so the first tick after it re-captures on its own.
     local captured = false
-    if (tonumber(cfg.mapSource) or 0) ~= 2 then
+    if cfg.liveTerrain then
         captured = capture.update(cfg, p.pawn, p.x, p.y, p.z, zoom, os.clock())
     end
 
@@ -882,10 +882,19 @@ menu.onCommit = function(keys)
             -- mips, which is what this key meant before 2.3.
             render.applyQuality(cfg)
             redraw = true
-        elseif key == "mapSource" or key == "liveZoomMax" then
+        elseif key == "liveTerrain" or key == "liveZoomMax" then
             -- Nothing to rebuild - but if the player is standing still,
             -- the draw path would skip the frame that would have shown
             -- them the change.
+            --
+            -- Unticking it also lets the capture component and its render
+            -- target go. They cost nothing per frame once nobody calls
+            -- update() (bCaptureEveryFrame is false), but the target is
+            -- several megabytes of VRAM held for a feature now switched
+            -- off, and destroy() is the only thing that frees it.
+            if key == "liveTerrain" and not cfg.liveTerrain then
+                capture.destroy()
+            end
             redraw = true
         elseif key == "opacity" then relayout = true
         elseif key == "enabled" then render.setVisible(cfg.enabled)
@@ -1111,7 +1120,11 @@ local function pump()
     end
     if wantMenu then
         lastMenu = now
-        guard.try("menuPoll", function() menu.poll(cfg) end)
+        -- ARGUMENTS, NOT A CLOSURE. This was the only guard.try in the
+        -- pump still wrapping its call in a fresh function, which is a
+        -- garbage object every poll while the menu is open - the exact
+        -- idiom the 2.0.9 stutter work removed everywhere else.
+        guard.try("menuPoll", menu.poll, cfg)
     end
     if wantScan then
         lastScan = now
@@ -1195,4 +1208,4 @@ guard.register("pump loop", function()
     LoopAsync(PUMP_MS, guard.loopBody("pump", pump, anythingDue))
 end)
 
-guard.log("PalMiniMap 2.3.2 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
+guard.log("PalMiniMap 2.3.3 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
