@@ -149,30 +149,27 @@ local function mapTexturePath(cfg)
 end
 
 -- ---------------------------------------------------------------
--- WHICH TERRAIN, and why "auto" is the default.
+-- WHICH TERRAIN. One checkbox, `liveTerrain`, plus one hard limit.
 --
--- `mapSource`: 0 auto, 1 always the live render, 2 always the game's map
--- texture.
+-- THE LIVE RENDER CAN ONLY SHOW WHAT THE GAME HAS STREAMED IN. Zoomed
+-- right out - megazoom is 260 000 world units across, more than two
+-- kilometres - most of what should be in frame is not loaded, so the
+-- capture comes back mostly empty while the painted world map shows the
+-- whole island perfectly. Zoomed in, the opposite is true: the capture is
+-- current, shows buildings and works in places the texture has never
+-- heard of.
 --
--- Auto is not a hedge, it is the honest answer to a hard limit: THE LIVE
--- RENDER CAN ONLY SHOW WHAT THE GAME HAS STREAMED IN. Zoomed right out -
--- megazoom is 260 000 world units across, more than two kilometres - most
--- of what should be in frame is not loaded, so the capture comes back
--- mostly empty while the painted world map shows the whole island
--- perfectly. Zoomed in, the opposite is true: the capture is current,
--- shows buildings and works in places the texture has never heard of.
---
--- So auto uses the live render up close, the texture when zoomed out past
--- `liveZoomMax`, and the live render REGARDLESS of zoom whenever the
--- player is somewhere the map texture does not cover - which is exactly
--- the dungeons and the far edges of the world this was built for.
+-- So with the box ticked the live render is used everywhere EXCEPT past
+-- `liveZoomMax`, where there would be nothing to see - and it is used
+-- past that limit anyway when the player is somewhere the map texture
+-- does not cover at all, because there a mostly-empty capture still beats
+-- a picture of the wrong place. That case (regionContaining == nil) is
+-- every dungeon and the far edges of the world.
 -- ---------------------------------------------------------------
 local function wantsLive(cfg, x, y, zoom)
-    local mode = tonumber(cfg.mapSource) or 0
-    if mode == 2 then return false end
+    if not cfg.liveTerrain then return false end
     if liveBrushBroken then return false end
     if not capture.available() then return false end
-    if mode == 1 then return true end
     if worldmap.regionContaining(x, y) == nil then return true end
     return zoom <= (tonumber(cfg.liveZoomMax) or 60000)
 end
@@ -345,8 +342,12 @@ end
 -- the rebuild trigger: needsRebuild compares the capacity, so a new budget
 -- key becomes a rebuild key for free.
 local function poolCapacity(cfg)
+    -- Every kind sources.lua can emit has to be counted here, or the draw
+    -- loop runs out of pool and drops whatever was emitted LAST without
+    -- saying so. Other players were missing from this sum until 2.3.3,
+    -- which cost the human NPCs their icons on any populated server.
     return (cfg.maxPalIcons or 48) + (cfg.maxPoiIcons or 48)
-         + (cfg.maxNpcIcons or 24)
+         + (cfg.maxNpcIcons or 24) + (cfg.maxPlayerIcons or 16)
 end
 
 -- ---------------------------------------------------------------
@@ -487,12 +488,15 @@ function M.build(pc, cfg)
     -- through the throttled queue and shows the member marker until it
     -- arrives. That split is what keeps the loading cost off the frame.
     assets.setQuality(cfg.mapQuality, mapTexturePath(cfg))
-    -- Skipped when the player has asked for the live render and nothing
-    -- else: the world map is tens of megabytes and this is a SYNCHRONOUS
-    -- load, so paying for it to draw nothing is the most expensive thing
-    -- in the whole build. Auto still needs it - that is what it falls back
-    -- to when zoomed out past the streamed-in world.
-    if (tonumber(cfg.mapSource) or 0) ~= 1 then
+    -- Skipped only when the texture can never be reached: the world map is
+    -- tens of megabytes and this is a SYNCHRONOUS load, so paying for it
+    -- to draw nothing is the most expensive thing in the whole build. With
+    -- the live render on it is still the fallback above `liveZoomMax`, so
+    -- it is only genuinely dead weight when that limit is at or past the
+    -- furthest the player can zoom.
+    local liveOnly = cfg.liveTerrain
+        and (tonumber(cfg.liveZoomMax) or 0) >= (tonumber(cfg.megazoom) or 0)
+    if not liveOnly then
         assets.loadNow(mapTexturePath(cfg), true)
     end
     assets.loadNow(MEMBER_TEXTURE, false)
@@ -719,9 +723,14 @@ local function drawTerrain(tex, gen, live, mapX, mapY, imagePx, pu, pv, rotate, 
                 b.px = imagePx
                 setSize(b.slot, imagePx, imagePx)
             end
+            -- Latch the generation only once the brush actually TOOK. It
+            -- used to be written first, so a setter that failed for one
+            -- frame left that strip showing the previous image until the
+            -- generation happened to change again - and since the strips
+            -- are latched independently, that reads as one band of the
+            -- disc frozen on old terrain.
             if tex ~= nil and b.gen ~= gen then
-                b.gen = gen
-                setTerrainBrush(b.image, tex, live)
+                if setTerrainBrush(b.image, tex, live) then b.gen = gen end
             end
             if rotate then
                 -- every strip holds the same quad at the same offset, so
@@ -738,9 +747,11 @@ local function drawTerrain(tex, gen, live, mapX, mapY, imagePx, pu, pv, rotate, 
     end
 
     if tex ~= nil and S.terrainGen ~= gen then
-        S.terrainGen = gen
-        S.mapTex = tex
-        setTerrainBrush(S.mapImage, tex, live)
+        -- as above: only remember the image once it is really on the brush
+        if setTerrainBrush(S.mapImage, tex, live) then
+            S.terrainGen = gen
+            S.mapTex = tex
+        end
     end
     setPos(S.mapSlot, mapX, mapY)
     if S.mapPx ~= imagePx then
