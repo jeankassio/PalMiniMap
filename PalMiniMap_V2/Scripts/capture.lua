@@ -82,9 +82,10 @@ local M = {}
 
 -- ESceneCaptureSource. Order verified against the shipping exe's string
 -- table, not assumed.
-local SCS_SCENE_COLOR_HDR = 0
-local SCS_FINAL_COLOR_LDR = 2
-local SCS_BASE_COLOR      = 7
+local SCS_SCENE_COLOR_HDR   = 0
+local SCS_FINAL_COLOR_LDR   = 2
+local SCS_SCENE_COLOR_DEPTH = 3
+local SCS_BASE_COLOR        = 7
 -- ECameraProjectionMode
 local PROJECTION_ORTHO    = 1
 -- ETextureRenderTargetFormat
@@ -123,14 +124,56 @@ local RENDER_LIB    = "/Script/Engine.Default__KismetRenderingLibrary"
 -- COLOUR *AND* ALPHA and steps to the next one when what came back cannot
 -- be drawn. The winner is logged with the pixel it was judged on.
 --
+-- ---------------------------------------------------------------------
+-- 2.3.2: EVERY SOURCE 2.3.1 TRIED CAME BACK WITH ALPHA ZERO, AND THE
+-- ANSWER IS `SCS_SceneColorSceneDepth`. This is the fix, so it is worth
+-- being precise about why the other three cannot work:
+--
+--   BaseColor       float4(GBuffer.BaseColor, 0)          - 0 by definition
+--   SceneColorHDR   float4(SceneColor.rgb, 1 - alpha)     - opaque geometry
+--                   leaves SceneColor.a at 1, so this is 1 - 1 = 0
+--   FinalColorLDR   whatever survives the post-process chain, and alpha
+--                   propagation through post is OFF by default in UE5
+--
+-- Every one of them encodes some flavour of "how TRANSLUCENT is this",
+-- which for solid ground is zero. None of them encodes coverage. That is
+-- not a wrong-source bug and no fourth guess at the same kind of source
+-- would have fixed it.
+--
+-- `SCS_SceneColorSceneDepth` is different in kind - it writes
+--
+--     float4(SceneColor.rgb, CalcSceneDepth(uv))
+--
+-- and scene depth is a distance in CENTIMETRES: the ground is
+-- `captureHeight` away, so ~1500. Written into a UNORM8 target that
+-- saturates at 1.0, which is exactly what we want and the reason this
+-- works - alpha comes out 255 everywhere there is any geometry at all,
+-- while the colour channels still carry the real scene colour. The
+-- depth's precision is irrelevant here; we are using it purely as an
+-- "something is here" bit that the other sources refuse to write.
+--
+-- The route AROUND the alpha - feeding the target through a material, the
+-- way 1.x did on a StaticMesh plane - is a dead end inside UMG and cost
+-- three native crashes to establish: a material drawn by Slate must have
+-- MaterialDomain = User Interface, `/Paper2D/OpaqueUnlitSpriteMaterial`
+-- is a Surface material, and the shader permutation for Slate's vertex
+-- factory was therefore never cooked. Slate draws it with a null shader
+-- and the render thread dies inside the game with no UE4SS frame on the
+-- stack. Material domain is a COMPILE-TIME property, so no amount of
+-- Lua fixes it. Do not go back down that road.
+--
 -- THE FORMAT FOLLOWS THE SOURCE, and getting the pair wrong shows up as a
 -- washed-out or a crushed minimap rather than as an error:
---   * BaseColor and SceneColorHDR write LINEAR values, so the target is
---     sRGB - the hardware encodes on write and Slate decodes on read;
+--   * BaseColor, SceneColorHDR and SceneColorSceneDepth write LINEAR
+--     values, so the target is sRGB - the hardware encodes on write and
+--     Slate decodes on read;
 --   * FinalColorLDR has already been through the tonemapper and is
 --     sRGB-encoded, so an sRGB target would encode it a second time.
 -- ---------------------------------------------------------------
 local SOURCES = {
+    [SCS_SCENE_COLOR_DEPTH] = { format = RTF_RGBA8_SRGB,
+        name = "scene colour with depth as alpha (lit; the only source that "
+            .. "comes out opaque)" },
     [SCS_BASE_COLOR] = { format = RTF_RGBA8_SRGB,
         name = "base colour (flat: no lighting, shadow, fog or night)" },
     [SCS_SCENE_COLOR_HDR] = { format = RTF_RGBA8_SRGB,
@@ -139,27 +182,80 @@ local SOURCES = {
         name = "final colour (lit, tonemapped)" },
 }
 
+-- `captureStyle` 0 leads with the source that is KNOWN to come out
+-- drawable on this build, because a chain that starts with a measured
+-- failure costs the player a blank minimap and a target rebuild per step
+-- at the beginning of every session.
+--
+-- Style 1 still leads with BaseColor for the flat, always-daylight look,
+-- since that is genuinely nicer when it works and a build whose post
+-- pipeline propagates alpha would deliver it - but it is EXPECTED to fall
+-- through to the same place on stock Palworld. It is an opt-in with a
+-- known cost, not the default.
 local STYLES = {
-    [0] = { name = "flat", chain = { SCS_BASE_COLOR, SCS_SCENE_COLOR_HDR,
-                                     SCS_FINAL_COLOR_LDR } },
-    [1] = { name = "lit",  chain = { SCS_FINAL_COLOR_LDR, SCS_SCENE_COLOR_HDR,
-                                     SCS_BASE_COLOR } },
+    [0] = { name = "lit",  chain = { SCS_SCENE_COLOR_DEPTH, SCS_SCENE_COLOR_HDR,
+                                     SCS_FINAL_COLOR_LDR, SCS_BASE_COLOR } },
+    [1] = { name = "flat", chain = { SCS_BASE_COLOR, SCS_SCENE_COLOR_DEPTH,
+                                     SCS_SCENE_COLOR_HDR, SCS_FINAL_COLOR_LDR } },
 }
 
 -- `mapQuality` meant "render target resolution" in 1.x and nothing at all
 -- in 2.0-2.2 (there was no render). It means resolution again.
 local RESOLUTION = { [0] = 256, [1] = 384, [2] = 512, [3] = 768 }
 
--- How much wider than the visible minimap the capture is.
+-- ---------------------------------------------------------------
+-- THE CAPTURED WINDOW IS WIDER THAN THE VISIBLE ONE, AND IT IS HELD
+-- FIXED BETWEEN CAPTURES. That second half is 2.3.2's zoom fix.
 --
--- 1.414 is the floor and it is not a taste decision: when the map rotates
--- with the camera, a SQUARE minimap's corners sweep a circle of diameter
--- `zoom * sqrt(2)`, and anything not captured shows as an empty wedge
--- turning with the player. The rest is movement headroom - at 1.55 the
--- image stays valid for about 1500 world units of travel at the default
--- zoom, i.e. comfortably longer than the gap between two captures even
--- when flying.
-local OVERSCAN = 1.55
+-- 2.3.1 recomputed `capW = zoom * OVERSCAN` every tick and wrote it to
+-- OrthoWidth, and render.lua sizes the quad as `capW * (size / zoom)`.
+-- Substitute one into the other:
+--
+--     imagePx = (zoom * OVERSCAN) * (size / zoom) = OVERSCAN * size
+--
+-- The zoom CANCELS. The quad was the same number of pixels at every zoom
+-- level, so zooming only changed how much world the same on-screen image
+-- covered - i.e. its sharpness - which grass does not make visible. That
+-- is Jean's "o mapa nao ta seguindo o zoom quando render e live", and it
+-- was pure algebra, not a reflection or engine problem.
+--
+-- The fix: a capture fixes `capW` at the zoom it was taken at, and that
+-- number is then CONSTANT until a recapture. `k = size / zoom` keeps
+-- moving, so `imagePx = capW * k` moves with it and the terrain zooms -
+-- exactly the mechanism the map-texture path always used (its span is the
+-- region's, which never changes at all), just refreshed periodically.
+--
+-- OVERSCAN then has to cover three things at once, and this is why it is
+-- 1.75 rather than the 1.414 floor:
+--   * rotation - a SQUARE minimap's corners sweep a circle of diameter
+--     `zoom * sqrt(2)`, and uncaptured world shows as an empty wedge
+--     turning with the player;
+--   * zooming OUT since the capture, up to the ceiling computed below;
+--   * MOVE_SLACK of drift off the captured centre before we recapture.
+-- `zoomCeiling` derives the headroom from those three instead of hard-
+-- coding a band, so the invariant cannot silently break if one changes.
+-- ---------------------------------------------------------------
+local OVERSCAN = 1.75
+local SQRT2 = 1.4142135623730951
+-- how far off the captured centre the player may drift, as a fraction of
+-- the captured width, before the image is refreshed
+local MOVE_SLACK = 0.04
+-- Zooming IN past this fraction of the captured zoom is not a correctness
+-- problem - the image covers more than enough world - but the same render
+-- target is being magnified over a smaller window, so it goes soft.
+-- Recapture to get the detail back.
+local ZOOM_BAND_LOW = 0.65
+
+-- The largest zoom (world units across the visible window) that the last
+-- capture can still legitimately cover. Past this there is nothing in the
+-- image for the edges of the minimap and it has to be retaken.
+local function zoomCeiling(capW, rotate)
+    local need = rotate and SQRT2 or 1.0
+    -- half the captured width, minus the drift we allow, is the furthest
+    -- from centre the image is guaranteed to be valid; the window needs
+    -- `zoom / 2 * need` of that.
+    return (capW * (0.5 - MOVE_SLACK) * 2.0) / need
+end
 
 -- Never capture more often than this however fast the player moves, and
 -- re-capture at least this often even when they are standing still (the
@@ -187,6 +283,8 @@ local S = {
 
     cx = nil, cy = nil,     -- world centre of the last capture
     capW = nil,             -- world units across the last capture
+    capZoom = nil,          -- the visible zoom it was taken at
+    orthoW = nil,           -- OrthoWidth currently written on the component
     capturedAt = 0.0,
 
     route = nil,            -- how the component was created, for the log
@@ -456,7 +554,10 @@ local function release(destroyComponent)
     end
     S.comp, S.rt = nil, nil
     S.rtPx, S.styleId, S.height, S.source = nil, nil, nil, nil
-    S.cx, S.cy, S.capW = nil, nil, nil
+    S.cx, S.cy, S.capW, S.capZoom = nil, nil, nil, nil
+    -- the component this was written on is going away, so forget it and
+    -- force the next capture to write OrthoWidth again
+    S.orthoW = nil
     S.verifyAt, S.blankStreak = nil, 0
     -- A release is a decision to rebuild NOW - a quality change, a
     -- respawn, a dead target. The retry clock exists to space out FAILED
@@ -707,7 +808,8 @@ function M.update(cfg, pawn, px, py, pz, zoom, now)
         end
         configure(styleId, style, sourceId, height)
         S.tries = 0
-        S.cx, S.cy, S.capW = nil, nil, nil
+        S.cx, S.cy, S.capW, S.capZoom = nil, nil, nil, nil
+        S.orthoW = nil
         S.verifyAt = now + VERIFY_DELAY
     elseif styleId ~= S.styleId or height ~= S.height or wantPx ~= S.rtPx
            or sourceId ~= S.source then
@@ -720,22 +822,34 @@ function M.update(cfg, pawn, px, py, pz, zoom, now)
     verify(now)
     if S.unavailable then return false end
 
-    -- Is a capture due? Three reasons, cheapest test first.
-    local capW = zoom * OVERSCAN
+    -- ---------------------------------------------------------------
+    -- IS A CAPTURE DUE? Cheapest test first.
+    --
+    -- Note what is NOT here any more: "the zoom changed". 2.3.1 recaptured
+    -- on any change at all to `zoom * OVERSCAN`, which with autozoom on is
+    -- very nearly every tick, and - because it also rewrote OrthoWidth to
+    -- match every time - was what made the terrain ignore the zoom
+    -- entirely (see the OVERSCAN comment). A capture is now retaken only
+    -- when the zoom has moved far enough that the existing image genuinely
+    -- cannot serve, and `capW` is left alone in between.
+    -- ---------------------------------------------------------------
+    local rotate = cfg.rotateWithCamera and true or false
     local due = false
-    if S.capW == nil then
+    if S.capW == nil or S.capZoom == nil then
         due = true
     else
         local interval = (tonumber(cfg.captureIntervalMs) or 250) / 1000.0
         if interval < MIN_INTERVAL then interval = MIN_INTERVAL end
         local age = now - S.capturedAt
         if age >= MIN_INTERVAL then
-            if capW ~= S.capW then
-                due = true                      -- the zoom changed
+            if zoom > zoomCeiling(S.capW, rotate) then
+                due = true              -- zoomed out past what we captured
+            elseif zoom < S.capZoom * ZOOM_BAND_LOW then
+                due = true              -- zoomed in far enough to go soft
             elseif age >= interval then
                 -- far enough off centre that the overscan is running out?
                 local dx, dy = px - S.cx, py - S.cy
-                local slack = capW * 0.04
+                local slack = S.capW * MOVE_SLACK
                 if (dx * dx + dy * dy) > (slack * slack) then
                     due = true
                 elseif age >= IDLE_REFRESH then
@@ -746,19 +860,29 @@ function M.update(cfg, pawn, px, py, pz, zoom, now)
     end
     if not due then return false end
 
+    -- The window this capture will cover. Computed HERE, in the branch that
+    -- actually captures, and nowhere else - an earlier draft updated the
+    -- captured-window fields every tick regardless of whether a capture
+    -- happened, which desyncs the centre and span render.lua is told about
+    -- from the pixels that are really in the target.
+    local capW = zoom * OVERSCAN
+
     -- Place it, THEN capture. On the attached route the engine has already
     -- put the component roughly here; this makes it exact, and on the
     -- unattached route it is the only thing that positions the camera at
     -- all. One reflection call per capture, four times a second.
     if not place(S.comp, px, py, pz + height) then return false end
-    if capW ~= S.capW then guard.get(rawSetOrtho, S.comp, capW) end
+    if S.orthoW ~= capW then
+        guard.get(rawSetOrtho, S.comp, capW)
+        S.orthoW = capW
+    end
 
     local started = os.clock()
     local ok = pcall(rawCaptureScene, S.comp)
     local cost = os.clock() - started
     if not ok then return false end
 
-    S.cx, S.cy, S.capW = px, py, capW
+    S.cx, S.cy, S.capW, S.capZoom = px, py, capW, zoom
     S.capturedAt = now
     S.captures = S.captures + 1
     S.costTotal = S.costTotal + cost

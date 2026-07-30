@@ -39,14 +39,17 @@ local DEFAULTS = {
 
     -- How the live render is taken. Each of these is the FIRST source of a
     -- chain, not a fixed choice: capture.lua measures what came back and
-    -- steps to the next one if it cannot be drawn (see the 2.3.1 note in
-    -- that file - `SCS_BaseColor` renders at alpha 0 on stock UE5, which
-    -- Slate draws as nothing at all).
-    --   0 flat - ask for SCS_BaseColor: the world's own colours with no
-    --            lighting, so the minimap would read the same at midnight
-    --            as at noon. EXPECT THIS TO FALL BACK to scene colour.
-    --   1 lit  - ask for SCS_FinalColorLDR: what the game is drawing,
-    --            night, weather and all.
+    -- steps to the next one if it cannot be drawn (see the long alpha note
+    -- in that file).
+    --   0 lit  - ask for SCS_SceneColorSceneDepth: the lit world, and the
+    --            ONE source that comes back opaque, because it puts scene
+    --            depth in the alpha channel where every other source puts
+    --            a translucency that is zero over solid ground.
+    --   1 flat - ask for SCS_BaseColor first: no lighting at all, so the
+    --            minimap would read the same at midnight as at noon. Nicer
+    --            when it works, but on stock Palworld it renders at alpha
+    --            0 and EXPECT IT TO FALL BACK to the lit source above,
+    --            after a few seconds of blank minimap per step.
     captureStyle       = 0,
     -- How far above the player the camera sits. THIS IS WHAT MAKES CAVES
     -- WORK: an orthographic camera does not render what is behind it, so
