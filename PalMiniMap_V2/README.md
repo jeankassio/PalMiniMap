@@ -81,27 +81,50 @@ Same layout as 1.x, deliberately.
 
 ### The menu follows the game's language (2.3.3)
 
-The `F5` menu is drawn in whatever language Palworld itself is set to —
-Portuguese if the game is in Portuguese, English otherwise. It is asked, not
-guessed: Palworld drives UE's own localisation system (every string is an
-`FText`, and `SetCurrentCulture` is in the shipping exe), so
-`KismetInternationalizationLibrary.GetCurrentLanguage()` on the CDO is the
-answer, with `GetCurrentCulture` / `GetCurrentLocale` behind it and the
-winner logged once. All four names were confirmed present in the exe before
-any of it was written.
+The `F5` menu is drawn in whatever language Palworld itself is set to. **Every
+culture the game ships is covered** — the list is not a guess, it is the set of
+folders under `Pal/Content/Localization/` in the shipping pak:
 
-The game's *own* `EPalLanguageType` was the obvious first idea and is a dead
-end: nothing reachable exposes its live value, its option lives in a save
-object rather than a config file, and `GameUserSettings.ini` on this build has
-no `[Internationalization] Culture=` line to read either.
+```
+de  en  es  es-MX  fr  id  it  ja  ko  pl  pt-BR  ru  th  tr  vi  zh-Hans  zh-Hant
+```
+
+English is the base and needs no table; `es-MX` shares `es`; anything else the
+engine reports falls back to English. That is 15 tables of 55 strings.
+
+The language is **asked, not guessed**: Palworld drives UE's own localisation
+system (every string is an `FText`, and `SetCurrentCulture` is in the shipping
+exe), so `KismetInternationalizationLibrary.GetCurrentLanguage()` on the CDO is
+the answer, with `GetCurrentCulture` / `GetCurrentLocale` behind it and the
+winner logged once. All four names were confirmed present in the exe before any
+of it was written. The game's *own* `EPalLanguageType` was the obvious first
+idea and is a dead end: nothing reachable exposes its live value, its option
+lives in a save object rather than a config file, and `GameUserSettings.ini` on
+this build has no `[Internationalization] Culture=` line to read either.
+
+Matching is **exact first, then alias, then base language** — doing the base
+first would collapse `zh-Hant` into `zh-Hans`, which is a different script.
 
 The lookup key is **the English string itself**, so `menu.lua`'s `LAYOUT` is
 untouched and anything with no translation falls back to English instead of
 showing a blank row — a new option is at worst untranslated, never broken.
-Adding a language is one more table in `i18n.lua`. `config.menuLanguage`
-forces one (`"pt-BR"`, `"en"`) if the detection is ever wrong; it has no menu
-row on purpose. Section headers go through `i18n.upper`, because Lua's
-`string.upper` is byte-wise and would render `Diagnóstico` as `DIAGNóSTICO`.
+`config.menuLanguage` forces one (`"ja"`, `"en"`) if the detection is ever
+wrong; it has no menu row on purpose.
+
+**`string.upper` is not usable here and that is a real bug it caused.** Section
+headers are uppercased, and Lua's `string.upper` is C's `toupper` per byte —
+locale dependent above 0x7F. On the harness's Lua it **mangled Japanese into
+invalid UTF-8**. `i18n.upper` therefore uppercases ASCII by explicit `[a-z]`
+byte range and adds two gsubs for the only cased scripts in these tables
+(Latin-1 and Cyrillic); Japanese, Korean, Chinese and Thai have no case and
+fall through untouched, which is correct. `i18ntest.py` compares *inside Lua*
+and returns a boolean, because handing mangled UTF-8 to Python raises and would
+crash the control instead of reporting it.
+
+Proper nouns are best effort. Palworld's own wording for a Lucky Pal or a
+Lifmunk Effigy lives in its `.locres` files, which this mod cannot cheaply
+read, so those few words are translated rather than quoted — they sit in one
+table each and are safe to correct.
 
 ## Feature parity with 1.x
 
