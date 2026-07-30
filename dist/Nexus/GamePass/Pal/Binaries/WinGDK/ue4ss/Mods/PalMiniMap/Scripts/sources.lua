@@ -167,6 +167,89 @@ ICON.egg = EGG_UNKNOWN
 
 local function rawClassName(actor) return actor:GetClass():GetFName():ToString() end
 
+local function classNameOf(actor)
+    local ok, cls = pcall(rawClassName, actor)
+    if ok and type(cls) == "string" and cls ~= "" then return cls end
+    return nil
+end
+
+-- ---------------------------------------------------------------
+-- "IS THIS ACTOR A PLAYER?" - LEARNED FROM THE GAME, NOT ASSUMED (2.3.3)
+--
+-- THE BUG THIS EXISTS FOR, reported on a multiplayer server against
+-- 2.1.2: with "show NPC humans" on and "show other players" OFF, the
+-- reporter's friends appeared wearing the human-NPC icon - and only some
+-- of them.
+--
+-- How a player ends up drawn as an NPC: the pal-vs-human test is "does
+-- this tribe have a species icon" (2.1.0), and a player's actor name
+-- gives a tribe like `PlayerBase` or `Player_Female`, which of course has
+-- no `T_<tribe>_icon_normal`. So a player that is not in the `excluded`
+-- set is classified HUMAN and drawn as one. Everything therefore rested
+-- on that set, which is built by NAME from a separate FindAllOf - and it
+-- silently produces no exclusions at all if the name read fails, if the
+-- player list comes back empty, or if `usableForExclusion` decides the
+-- class looks like a superclass of pals. Any of those and every nearby
+-- player becomes an NPC icon. ("Only some" is the `maxNpcIcons` budget
+-- downstream: it is filled nearest-first, so the closest friends got the
+-- icons and the rest were dropped.)
+--
+-- A SECOND, INDEPENDENT TEST, on a different property, fixes that: the
+-- actor's CLASS. Class is a fact about the actor rather than a hierarchy
+-- inference, which is the same reasoning that made the species-icon test
+-- the pal/human classifier in the first place.
+--
+-- The class names are LEARNED rather than hard-coded, because they are
+-- blueprints (`BP_PlayerBase_C`, `BP_Player_Female_C`, ...) and live in
+-- the pak, not the exe - exactly the kind of naming convention this mod
+-- has been bitten by before. Two sources feed the set, and the first one
+-- cannot fail: the LOCAL PLAYER'S OWN PAWN is a player character, and we
+-- always have it. Every actor the game hands back in a player list is
+-- added too, so both genders accumulate on their own.
+-- ---------------------------------------------------------------
+local playerClasses = {}        -- class name -> true, learned in-session
+
+-- The learned set alone is not quite enough: it only ever contains classes
+-- we have SEEN, and if the player list is the thing that failed, the only
+-- one seen is the local player's. A second player of the other gender is a
+-- different blueprint and would still slip through.
+--
+-- CHECKED AGAINST THE PAK, not assumed: the only two player pawns in
+-- `Pal/Content/Pal/Blueprint/Character/` are `BP_PlayerBase` and
+-- `BP_Player_Female`, and no Monster or NPC character blueprint has
+-- "Player" in its name at all. (`BP_NPCWeaponGenerator_PlayerGatling` does,
+-- but it is a weapon generator - it is not a PalCharacter, so it never
+-- reaches this test.) A false positive here costs one missing marker; a
+-- false negative is the bug being fixed, so the bias is deliberate.
+local PLAYER_CLASS_PATTERNS = { "^BP_Player", "PlayerCharacter" }
+
+local function looksLikePlayerClass(cls)
+    for i = 1, #PLAYER_CLASS_PATTERNS do
+        if string.find(cls, PLAYER_CLASS_PATTERNS[i]) then return true end
+    end
+    return false
+end
+
+local function notePlayerClass(actor)
+    if actor == nil then return nil end
+    local cls = classNameOf(actor)
+    if cls ~= nil then playerClasses[cls] = true end
+    return cls
+end
+
+local function isPlayerActor(actor)
+    local cls = classNameOf(actor)
+    if cls == nil then return false end
+    if playerClasses[cls] then return true end
+    if looksLikePlayerClass(cls) then
+        -- learn it, so the next actor of this class costs one table hit
+        playerClasses[cls] = true
+        return true
+    end
+    return false
+end
+M.isPlayerActor = isPlayerActor
+
 local eggIconFor = {}     -- class name -> texture path, resolved once
 
 local function eggIcon(actor)
@@ -284,6 +367,23 @@ local function actorLocation(actor)
     return x, y
 end
 M.actorLocation = actorLocation
+
+-- Height as well, for the ONE actor that needs it: the live terrain
+-- capture has to know how high to put its camera (capture.lua). Kept
+-- separate from actorLocation rather than added to it because that one is
+-- called for hundreds of actors a scan and every extra field read is paid
+-- by all of them.
+local function rawLocationZ(actor)
+    local loc = actor:K2_GetActorLocation()
+    return loc.X, loc.Y, loc.Z
+end
+
+function M.actorLocation3(actor)
+    if not guard.alive(actor) then return nil end
+    local ok, x, y, z = pcall(rawLocationZ, actor)
+    if not ok or type(x) ~= "number" or type(y) ~= "number" then return nil end
+    return x, y, (type(z) == "number") and z or 0.0
+end
 
 local function rawName(actor) return actor:GetFName():ToString() end
 
@@ -846,6 +946,65 @@ local function iconPathFor(tribe)
     return path
 end
 
+-- ---------------------------------------------------------------
+-- VARIANT SUFFIXES THAT REUSE THE BASE SPECIES PORTRAIT (2.3.3)
+--
+-- 2.1.4 found that alphas are `BP_<Species>_BOSS_C_<id>` and have no
+-- portrait of their own, so it fell back to the base species - but only
+-- for a `_BOSS` suffix, deliberately, because dropping ANY trailing
+-- segment sends every human tribe on a second chase as well
+-- (`NPC_Villager` -> `NPC`) for assets that never existed.
+--
+-- That was the right instinct and too narrow a list. Counted against the
+-- shipping pak: 457 Pal blueprints have no `T_<tribe>_icon_normal` of
+-- their own, 431 of them DO have a base species that does, and the
+-- `_BOSS`-only rule reaches just 286. The remaining 145 - every
+-- `_Predator`, `_Normal`, `_Skin001`, `_GYM`, `_Oilrig`, `_RAID`,
+-- `_Quest` and elemental variant - fail the species-icon test, and
+-- failing it is precisely what marks an actor as a HUMAN. They were being
+-- drawn with the NPC marker.
+--
+-- A WHITELIST keeps 2.1.4's guarantee: `Villager` is not in it, so no
+-- human tribe can start chasing. The suffixes below were derived by
+-- walking the pak index, not invented - see the audit in the README.
+-- Stripping repeats (bounded), because `AmaterasuWolf_Dark_BOSS` needs
+-- two passes to reach `AmaterasuWolf`.
+--
+-- The EXACT tribe is still probed first, and that ordering is load
+-- bearing: some variants really do have their own row (`FlameBuffalo_Ice`),
+-- and they must keep their own picture rather than the base one.
+-- ---------------------------------------------------------------
+local VARIANT_SUFFIX = {}
+for _, s in ipairs({
+    -- fight/spawn variants
+    "BOSS", "Boss", "BOSS2", "Predator", "Normal", "Quest", "Enemy",
+    "GYM", "Gym", "Hard", "BossRush", "RAID", "Oilrig", "Police",
+    "Summon", "MiddleBoss", "Ring", "otomo",
+    -- elemental re-skins; only reached when the exact tribe has no row
+    "Fire", "Ice", "Water", "Grass", "Dark", "Electric", "Ground",
+    "Neutral", "Dragon", "Flower", "Gold", "Thunder", "Green",
+}) do VARIANT_SUFFIX[s] = true end
+
+local function isVariantSuffix(s)
+    if VARIANT_SUFFIX[s] then return true end
+    -- Skin001 .. Skin004, and any future numbered skin
+    return s:match("^Skin%d+$") ~= nil
+end
+
+-- "AmaterasuWolf_Dark_BOSS" -> "AmaterasuWolf", or nil when nothing
+-- recognisable can be stripped. Bounded so a pathological name cannot
+-- loop, and the result is cached by the caller.
+local function strippedVariant(tribe)
+    local cur = tribe
+    for _ = 1, 4 do
+        local head, tail = cur:match("^(.+)_([A-Za-z0-9]+)$")
+        if head == nil or not isVariantSuffix(tail) then break end
+        cur = head
+    end
+    if cur == tribe then return nil end
+    return cur
+end
+
 local function speciesIcon(tribe)
     if tribe == nil or tribe == "" then return false end
     local hit = iconForTribe[tribe]
@@ -883,7 +1042,7 @@ local function speciesIcon(tribe)
     -- portrait, the "no species icon for:" line in the log names it.
     local base = baseTribe[tribe]
     if base == nil then
-        base = tribe:match("^(.+)_[Bb][Oo][Ss][Ss]$") or false
+        base = strippedVariant(tribe) or false
         baseTribe[tribe] = base
     end
     if base then
@@ -1217,9 +1376,48 @@ end
 -- crowd of villagers is scenery, not information.
 --
 -- The list is filled in distance order, so this keeps the nearest.
+local playersDrawnAsNpcs, reportedPlayerAsNpc = 0, false
+
 local function addNPC(cfg, actor, name)
+    -- A PLAYER IS NEVER AN NPC. This is the backstop for the name-based
+    -- exclusion set (see isPlayerActor): it sits in the ONE place all
+    -- three scan routes funnel through, so a player cannot wear the human
+    -- marker whatever went wrong upstream. It also covers the local
+    -- player, whose own arrow would otherwise get an NPC icon stacked
+    -- under it - the 2.0.5 double-marker bug, by a different road.
+    if isPlayerActor(actor) then
+        playersDrawnAsNpcs = playersDrawnAsNpcs + 1
+        if not reportedPlayerAsNpc then
+            reportedPlayerAsNpc = true
+            guard.log("a player reached the NPC list - the name-based exclusion "
+                .. "missed it, and the class test caught it. Other players will "
+                .. "not be drawn as human NPCs.")
+        end
+        return
+    end
     if #S.npcs >= (cfg.maxNpcIcons or 24) then return end
     S.npcs[#S.npcs + 1] = { actor = actor, icon = npcIcon(actor, name) }
+end
+
+-- OTHER PLAYERS NEED A BUDGET LIKE EVERY OTHER KIND (2.3.3).
+--
+-- This was the one list feeding the draw with no limit on it. render.lua
+-- sizes its icon pool from maxPalIcons + maxPoiIcons + maxNpcIcons, and
+-- collect() emits statics, then pals, then PLAYERS, then humans - so on a
+-- server every player beyond the pool's spare room pushed an NPC off the
+-- end, silently, because the draw loop simply stops at `used >= limit`.
+-- Exactly the failure mode the maxNpcIcons note below describes, arrived
+-- at from the other direction.
+--
+-- It never showed up in testing because in singleplayer this list is
+-- always EMPTY: the local player is excluded by name.
+--
+-- The caller still records the name in `excluded` whether or not the icon
+-- is taken - that bookkeeping is what stops a player being counted as a
+-- pal, and it must not depend on a budget.
+local function addPlayer(cfg, actor)
+    if #S.players >= (cfg.maxPlayerIcons or 16) then return end
+    S.players[#S.players + 1] = actor
 end
 
 local function addPal(cfg, actor, tribe, playerPawn)
@@ -1313,16 +1511,20 @@ local function scanViaCollector(cfg, px, py, maxD2, playerPawn)
     local excluded = exclScratch
     for k in pairs(excluded) do excluded[k] = nil end
 
+    -- The local player's own pawn IS a player character, so this is the
+    -- one source of the player class set that can never come back empty.
+    notePlayerClass(playerPawn)
     local selfName = playerPawn ~= nil and actorName(playerPawn) or nil
     if selfName ~= nil then excluded[selfName] = true end
 
     for i = 1, nPly do
         local a = playerBuf2[i]
+        notePlayerClass(a)
         local n = actorName(a)
         if n ~= nil then
             excluded[n] = true
             if cfg.showPlayers and n ~= selfName then
-                S.players[#S.players + 1] = a
+                addPlayer(cfg, a)
             end
         end
     end
@@ -1384,18 +1586,20 @@ local function scanViaUtility(cfg, px, py, maxD2, playerPawn, ctx)
     local nHum = utilityList("GetHumanNPCs", ctx, humansBuf) or 0
     local nPly = utilityList("GetAllPlayerCharacters", ctx, playersBuf) or 0
 
+    notePlayerClass(playerPawn)
     local selfName = playerPawn ~= nil and actorName(playerPawn) or nil
     local excluded = nil
     if selfName ~= nil then excluded = { [selfName] = true } end
 
     for i = 1, nPly do
         local a = playersBuf[i]
+        notePlayerClass(a)
         local n = actorName(a)
         if n ~= nil then
             excluded = excluded or {}
             excluded[n] = true
             if cfg.showPlayers and n ~= selfName then
-                S.players[#S.players + 1] = a
+                addPlayer(cfg, a)
             end
         end
     end
@@ -1458,6 +1662,7 @@ local function scanViaFindAll(cfg, px, py, maxD2, playerPawn)
     if playerPawn ~= nil then
         excluded = excluded or {}
     end
+    notePlayerClass(playerPawn)
     local selfName = playerPawn ~= nil and addExcluded(excluded, playerPawn) or nil
     local nPlayers = 0
 
@@ -1468,9 +1673,10 @@ local function scanViaFindAll(cfg, px, py, maxD2, playerPawn)
             excluded = excluded or {}
             for i = 1, #all do
                 local a = all[i]
+                notePlayerClass(a)
                 local n = addExcluded(excluded, a)
                 if cfg.showPlayers and n ~= selfName then
-                    S.players[#S.players + 1] = a
+                    addPlayer(cfg, a)
                 end
             end
         end
@@ -1483,7 +1689,7 @@ local function scanViaFindAll(cfg, px, py, maxD2, playerPawn)
     local near, n = gatherNear(rawPals, palCount, px, py, maxD2, excluded, true)
 
     -- Nearest first, so the icon budget always goes to what is closest.
-    local nPals, nHumans = 0, 0
+    local nPals, nHumans, nLatePlayers = 0, 0, 0
     for i = 1, n do
         local e = near[i]
         local tribe = tribeOf(e.name)
@@ -1492,15 +1698,37 @@ local function scanViaFindAll(cfg, px, py, maxD2, playerPawn)
         -- false + format unproven = we have no basis to filter anything
         local isPal = (icon ~= false) or (not iconFormatWorks)
         if isPal then
-            nPals = nPals + 1
-            if cfg.showPals and inWorld(e.actor) then
-                addPal(cfg, e.actor, tribe, playerPawn)
+            -- Until one species icon has resolved, `iconFormatWorks` is
+            -- false and EVERYTHING answers "pal" - that is 2.1.0's safety
+            -- valve, and it is right, but it means a player would wear a
+            -- pal marker for the first scan or two. Rule that out while
+            -- the window is open; once the format is proven, a player can
+            -- only ever land in the human branch below, and this costs
+            -- nothing again.
+            if not iconFormatWorks and isPlayerActor(e.actor) then
+                nLatePlayers = nLatePlayers + 1
+            else
+                nPals = nPals + 1
+                if cfg.showPals and inWorld(e.actor) then
+                    addPal(cfg, e.actor, tribe, playerPawn)
+                end
             end
+        -- ONLY HERE is the class read paid for. A player the name-based
+        -- exclusion missed lands in this branch, because its tribe
+        -- (`PlayerBase`) has no species icon - but so does every real
+        -- human, and there are far fewer of those nearby than there are
+        -- pals. Testing every character instead would put a
+        -- GetClass():GetFName():ToString() on each one, which is the kind
+        -- of per-actor reflection that scales with how crowded the area is
+        -- - the thing that made walking hitch in 2.1.2.
+        elseif isPlayerActor(e.actor) then
+            nLatePlayers = nLatePlayers + 1
         else
             nHumans = nHumans + 1
             if cfg.showNPCs then addNPC(cfg, e.actor, e.name) end
         end
     end
+    nPlayers = nPlayers + nLatePlayers
 
     -- one line, once: enough to tell "no pals nearby" apart from "the
     -- filter ate them", which is the question this whole thing exists for
@@ -2013,7 +2241,14 @@ local function emit(n, x, y, tex, size, tint, fallback, isPal)
     if m == nil then m = {}; markPool[n] = m end
     m.x, m.y = x, y
     m.texture, m.fallback = tex, fallback
-    m.size, m.tint, m.isPal = size, tint, isPal
+    -- `or WHITE` closes a pooled-entry trap rather than fixing a live bug:
+    -- every caller passes a tint today, but render.lua only writes the
+    -- tint when it is non-nil, so a future kind that omitted one would
+    -- inherit the colour of whatever mark last used that pool slot - the
+    -- same way a missing `p.tex` once stuck a stale texture on a chest.
+    -- WHITE is a single shared table, so render's identity compare still
+    -- costs nothing.
+    m.size, m.tint, m.isPal = size, tint or WHITE, isPal
     return n
 end
 

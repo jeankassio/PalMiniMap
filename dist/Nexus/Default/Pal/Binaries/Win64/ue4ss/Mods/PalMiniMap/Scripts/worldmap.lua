@@ -55,15 +55,29 @@ local REGIONS = {
     },
 }
 
--- Region whose bounds contain the point; falls back to the main island so
--- the minimap degrades to "slightly wrong" instead of "blank".
-function M.regionFor(x, y)
+-- Region whose bounds really contain the point, or NIL when the point is
+-- somewhere the map texture does not cover.
+--
+-- That nil is the whole point of it: the inside of a dungeon and the far
+-- edges of the world are not on the painted map, and until 2.3 the mod had
+-- no way to say so - regionFor() quietly answered "the main island" and the
+-- minimap drew a piece of coastline the player was nowhere near. `auto`
+-- terrain (render.lua) uses this to switch to the live render exactly
+-- there.
+function M.regionContaining(x, y)
+    if type(x) ~= "number" or type(y) ~= "number" then return nil end
     for _, r in ipairs(REGIONS) do
         if x >= r.minX and x <= r.maxX and y >= r.minY and y <= r.maxY then
             return r
         end
     end
-    return REGIONS[1]
+    return nil
+end
+
+-- Same, but falling back to the main island, so a caller that must draw
+-- SOMETHING degrades to "slightly wrong" instead of "blank".
+function M.regionFor(x, y)
+    return M.regionContaining(x, y) or REGIONS[1]
 end
 
 function M.regions() return REGIONS end

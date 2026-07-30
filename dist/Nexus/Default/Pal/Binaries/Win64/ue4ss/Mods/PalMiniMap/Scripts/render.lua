@@ -1,22 +1,32 @@
 -- =====================================================================
 -- render.lua - the minimap widget
 --
--- THE WHOLE POINT OF VERSION 2, in one paragraph:
+-- WHAT VERSION 2 KEPT AND WHAT 2.3 GAVE BACK.
 --
--- The 1.x mod inherited a SceneCaptureComponent2D that re-rendered the
--- entire world from above into a render target EVERY FRAME - a second
--- full render pass, all the time - and drew its icons as
--- StaticMeshComponents attached to the actors they marked. That design
--- produced every serious bug this mod ever had: the permanent GPU cost,
--- the FPS decay as icon components piled up, and two hard crashes from
--- dereferencing icons whose target actor had been destroyed.
+-- The 1.x mod re-rendered the world from above into a render target EVERY
+-- FRAME and drew its icons as StaticMeshComponents attached to the actors
+-- they marked. That produced every serious bug the mod ever had: a
+-- permanent GPU cost, FPS decay as icon components piled up, and two hard
+-- crashes from dereferencing icons whose target actor had been destroyed.
 --
--- This file has neither. The background is the game's own world map
--- texture drawn as ONE quad, panned by moving it inside a clipped canvas.
--- The icons are pooled UMG Images positioned by arithmetic. Nothing is
--- ever attached to a world actor, and no reference to one is held across
--- a frame, so an actor dying mid-update is a non-event instead of an
--- access violation.
+-- 2.0 threw both out and drew the game's own world map TEXTURE as one
+-- quad. That fixed the crashes and the cost, and it had one flaw nothing
+-- could paper over: the texture is a picture of the main island, so the
+-- great tree at the edge of the world and the inside of every dungeon had
+-- no map at all.
+--
+-- 2.3 brings the second render back - and ONLY the second render. See
+-- capture.lua: it is orthographic, it is throttled to a few frames a
+-- second instead of all of them, it stops entirely when the minimap is
+-- hidden, and it is one component on the player's own pawn. The icons stay
+-- exactly as they were: pooled UMG Images positioned by arithmetic,
+-- nothing attached to a world actor, no reference to one held across a
+-- frame.
+--
+-- This file no longer cares which of the two the terrain came from. It is
+-- handed a texture, the world point that texture is centred on and how
+-- many world units it spans, and the quad arithmetic is the same either
+-- way.
 --
 -- Every setter here goes through reflection, which is not free, so the
 -- update path writes only what actually CHANGED. Position is the only
@@ -26,6 +36,7 @@
 local guard = require("guard")
 local worldmap = require("worldmap")
 local assets = require("assets")
+local capture = require("capture")
 
 local M = {}
 
@@ -55,6 +66,11 @@ local S = {
     rim = nil, rimSlot = nil,
     mapImage = nil, mapSlot = nil, mapPx = nil,
     mapTex = nil, mapTexPath = nil,
+    -- Which terrain image the brushes are currently wearing. A number,
+    -- not the object: identity on a reflected UObject does not survive a
+    -- round trip through UE4SS, so "is this still the same texture" has to
+    -- be asked with a counter that only ever changes when the answer is no.
+    terrainGen = nil,
     bands = nil,            -- circular mode: list of clipped strips
     playerIcon = nil, playerSlot = nil,
     playerSize = nil, playerAngle = nil,
@@ -116,17 +132,55 @@ end
 -- asks for, and the rule that on a per-frame path it may only ever ASK:
 -- `assets.get` never blocks, and returns nil until the texture is in.
 -- ---------------------------------------------------------------
+-- Which terrain-brush setter took, logged ONCE, and whether NEITHER did.
+--
+-- DECLARED HERE, ABOVE wantsLive, ON PURPOSE. Lua resolves an undeclared
+-- name to a global, so a `local` further down the file would leave
+-- `liveBrushBroken` reading as nil in wantsLive with no warning of any
+-- kind - the same ordering trap that silently disabled the chest
+-- `collected` readers in 2.2.19.
+local brushRoute = nil
+local liveBrushBroken = false
+
 local function mapTexturePath(cfg)
     local override = cfg and cfg.terrainTexture
     if type(override) == "string" and override ~= "" then return override end
     return MAP_TEXTURE
 end
 
--- Re-apply the quality setting to everything already loaded. Called when
--- the menu changes it, never periodically - the flags live on the texture
--- object, so setting them once is enough.
+-- ---------------------------------------------------------------
+-- WHICH TERRAIN. One checkbox, `liveTerrain`, plus one hard limit.
+--
+-- THE LIVE RENDER CAN ONLY SHOW WHAT THE GAME HAS STREAMED IN. Zoomed
+-- right out - megazoom is 260 000 world units across, more than two
+-- kilometres - most of what should be in frame is not loaded, so the
+-- capture comes back mostly empty while the painted world map shows the
+-- whole island perfectly. Zoomed in, the opposite is true: the capture is
+-- current, shows buildings and works in places the texture has never
+-- heard of.
+--
+-- So with the box ticked the live render is used everywhere EXCEPT past
+-- `liveZoomMax`, where there would be nothing to see - and it is used
+-- past that limit anyway when the player is somewhere the map texture
+-- does not cover at all, because there a mostly-empty capture still beats
+-- a picture of the wrong place. That case (regionContaining == nil) is
+-- every dungeon and the far edges of the world.
+-- ---------------------------------------------------------------
+local function wantsLive(cfg, x, y, zoom)
+    if not cfg.liveTerrain then return false end
+    if liveBrushBroken then return false end
+    if not capture.available() then return false end
+    if worldmap.regionContaining(x, y) == nil then return true end
+    return zoom <= (tonumber(cfg.liveZoomMax) or 60000)
+end
+
+-- Re-apply the quality setting. Called when the menu changes it, never
+-- periodically. It means two different things now and both are handled
+-- here: which mip of the map texture is pinned resident, and how big the
+-- live render's target is.
 function M.applyQuality(cfg)
     assets.setQuality(cfg.mapQuality, mapTexturePath(cfg))
+    capture.reconfigure(cfg)
 end
 
 -- One-off diagnostic: how big the terrain texture really is, and how far
@@ -188,6 +242,41 @@ end
 
 local function rawSetAngle(w, a) w:SetRenderTransformAngle(a) end
 local function rawSetBrush(w, tex) w:SetBrushFromTexture(tex, false) end
+-- A render target is a UTextureRenderTarget2D, NOT a UTexture2D, so
+-- SetBrushFromTexture's parameter type rejects it. SetBrushResourceObject
+-- takes any UObject and is what the live terrain has to go through; the
+-- ordinary texture path keeps the typed setter, which also sets the
+-- brush's image size for it.
+local function rawSetBrushObject(w, tex) w:SetBrushResourceObject(tex) end
+
+local function setTerrainBrush(w, tex, live)
+    if live then
+        if pcall(rawSetBrushObject, w, tex) then
+            if brushRoute ~= "resource" then
+                brushRoute = "resource"
+                guard.log("live terrain drawn via SetBrushResourceObject")
+            end
+            return true
+        end
+        if pcall(rawSetBrush, w, tex) then
+            if brushRoute ~= "texture" then
+                brushRoute = "texture"
+                guard.log("live terrain drawn via SetBrushFromTexture "
+                    .. "(SetBrushResourceObject was refused)")
+            end
+            return true
+        end
+        if not liveBrushBroken then
+            liveBrushBroken = true
+            guard.log("neither SetBrushResourceObject nor SetBrushFromTexture "
+                .. "would take the render target, so the live terrain cannot be "
+                .. "drawn on this build; using the game's world map texture")
+        end
+        return false
+    end
+    if pcall(rawSetBrush, w, tex) then return true end
+    return pcall(rawSetBrushObject, w, tex)
+end
 local function rawSetTint(w, c) w:SetColorAndOpacity(c) end
 local function rawSetVisibility(w, v) w:SetVisibility(v) end
 
@@ -253,8 +342,12 @@ end
 -- the rebuild trigger: needsRebuild compares the capacity, so a new budget
 -- key becomes a rebuild key for free.
 local function poolCapacity(cfg)
+    -- Every kind sources.lua can emit has to be counted here, or the draw
+    -- loop runs out of pool and drops whatever was emitted LAST without
+    -- saying so. Other players were missing from this sum until 2.3.3,
+    -- which cost the human NPCs their icons on any populated server.
     return (cfg.maxPalIcons or 48) + (cfg.maxPoiIcons or 48)
-         + (cfg.maxNpcIcons or 24)
+         + (cfg.maxNpcIcons or 24) + (cfg.maxPlayerIcons or 16)
 end
 
 -- ---------------------------------------------------------------
@@ -271,6 +364,7 @@ function M.destroy()
     S.backdrop, S.backdropSlot = nil, nil
     S.mapImage, S.mapSlot, S.mapTex = nil, nil, nil
     S.mapPx, S.mapAngle = nil, nil
+    S.terrainGen = nil
     S.bands = nil
     S.rim, S.rimSlot, S.rimSize = nil, nil, nil
     S.editBorder, S.editSlot = nil, nil
@@ -394,7 +488,17 @@ function M.build(pc, cfg)
     -- through the throttled queue and shows the member marker until it
     -- arrives. That split is what keeps the loading cost off the frame.
     assets.setQuality(cfg.mapQuality, mapTexturePath(cfg))
-    assets.loadNow(mapTexturePath(cfg), true)
+    -- Skipped only when the texture can never be reached: the world map is
+    -- tens of megabytes and this is a SYNCHRONOUS load, so paying for it
+    -- to draw nothing is the most expensive thing in the whole build. With
+    -- the live render on it is still the fallback above `liveZoomMax`, so
+    -- it is only genuinely dead weight when that limit is at or past the
+    -- furthest the player can zoom.
+    local liveOnly = cfg.liveTerrain
+        and (tonumber(cfg.liveZoomMax) or 0) >= (tonumber(cfg.megazoom) or 0)
+    if not liveOnly then
+        assets.loadNow(mapTexturePath(cfg), true)
+    end
     assets.loadNow(MEMBER_TEXTURE, false)
     local wbl = cls("/Script/UMG.Default__WidgetBlueprintLibrary")
     local userWidgetClass = cls("/Script/UMG.UserWidget")
@@ -603,8 +707,12 @@ function M.isVisible() return S.visible end
 -- array and `count` says how much of it is live. Callers pass plain
 -- numbers - never UObjects - so nothing here can touch a dying actor.
 -- ---------------------------------------------------------------
-local function drawTerrain(cfg, mapX, mapY, imagePx, pu, pv, rotate, yaw)
-    local tex = assets.get(mapTexturePath(cfg))
+-- `gen` identifies the image on the brushes: it changes when the terrain
+-- switches between the live render and the map texture, and when the live
+-- render target is rebuilt at a new resolution. Anything else and the
+-- brush is left alone, because re-applying it every frame is a reflection
+-- call per strip for no change at all.
+local function drawTerrain(tex, gen, live, mapX, mapY, imagePx, pu, pv, rotate, yaw)
     local angle = rotate and -yaw or 0.0
 
     if S.bands ~= nil then
@@ -615,9 +723,14 @@ local function drawTerrain(cfg, mapX, mapY, imagePx, pu, pv, rotate, yaw)
                 b.px = imagePx
                 setSize(b.slot, imagePx, imagePx)
             end
-            if tex ~= nil and b.tex == nil then
-                b.tex = tex
-                pcall(rawSetBrush, b.image, tex)
+            -- Latch the generation only once the brush actually TOOK. It
+            -- used to be written first, so a setter that failed for one
+            -- frame left that strip showing the previous image until the
+            -- generation happened to change again - and since the strips
+            -- are latched independently, that reads as one band of the
+            -- disc frozen on old terrain.
+            if tex ~= nil and b.gen ~= gen then
+                if setTerrainBrush(b.image, tex, live) then b.gen = gen end
             end
             if rotate then
                 -- every strip holds the same quad at the same offset, so
@@ -633,9 +746,12 @@ local function drawTerrain(cfg, mapX, mapY, imagePx, pu, pv, rotate, yaw)
         return tex
     end
 
-    if tex ~= nil and S.mapTex == nil then
-        S.mapTex = tex
-        pcall(rawSetBrush, S.mapImage, tex)
+    if tex ~= nil and S.terrainGen ~= gen then
+        -- as above: only remember the image once it is really on the brush
+        if setTerrainBrush(S.mapImage, tex, live) then
+            S.terrainGen = gen
+            S.mapTex = tex
+        end
     end
     setPos(S.mapSlot, mapX, mapY)
     if S.mapPx ~= imagePx then
@@ -659,15 +775,18 @@ function M.update(cfg, player, marks, count)
 
     local size = cfg.size
     local half = size * 0.5
-    local region = worldmap.regionFor(player.x, player.y)
-    local pu, pv = worldmap.toUV(player.x, player.y, region)
-    if pu == nil then return end
-
-    -- world units across the window -> pixels per normalised unit
-    local spanWorld = region.maxX - region.minX
-    if spanWorld <= 0 then return end
     local zoom = M.effectiveZoom(cfg, player.speed)
-    local imagePx = size * (spanWorld / zoom)
+
+    -- THE ONE NUMBER EVERYTHING ELSE IS BUILT ON: screen pixels per world
+    -- unit. Both terrain sources and every icon are placed with it, so the
+    -- two can never disagree about where a point in the world is.
+    --
+    -- 2.2 went through normalised map UVs to get here, which was the same
+    -- arithmetic wearing a coordinate system it did not need - and it
+    -- meant every icon depended on the player being inside a mapped
+    -- region, so in a dungeon the markers went wherever the fallback
+    -- region put them. World deltas are correct everywhere.
+    local k = size / zoom
 
     local rotate = cfg.rotateWithCamera and type(player.yaw) == "number"
     local cosA, sinA = 1.0, 0.0
@@ -676,10 +795,55 @@ function M.update(cfg, player, marks, count)
         cosA, sinA = math.cos(rad), math.sin(rad)
     end
 
-    -- background: the map quad(s), moved so the player's point is centred
-    local tex = drawTerrain(cfg, half - pu * imagePx, half - pv * imagePx,
-                            imagePx, pu, pv, rotate, player.yaw)
-    reportTextureSize(tex, cfg, imagePx, size)
+    -- ---------------------------------------------------------------
+    -- The terrain quad.
+    --
+    -- Both sources reduce to the same three numbers: a texture, the world
+    -- point it is centred on and how many world units it spans. The quad
+    -- is then that span in pixels, positioned so its centre lands where
+    -- its world centre belongs relative to the player, who is always at
+    -- the middle of the window.
+    --
+    --   live : centre = where the camera was when it last captured, span =
+    --          the orthographic width it used. Those lag the player by up
+    --          to one capture interval, which is precisely what the
+    --          overscan is for - the quad slides under the window and the
+    --          picture stays put in the world.
+    --   map  : centre = the middle of the region, span = the whole region.
+    -- ---------------------------------------------------------------
+    local live = wantsLive(cfg, player.x, player.y, zoom)
+    local tex, gen, cx, cy, spanWorld
+    if live then
+        tex = capture.texture()
+        cx, cy, spanWorld = capture.centre()
+        gen = capture.generation()
+    end
+    if tex == nil or cx == nil or spanWorld == nil or spanWorld <= 0 then
+        live = false
+        local region = worldmap.regionFor(player.x, player.y)
+        spanWorld = region.maxX - region.minX
+        if spanWorld <= 0 then return end
+        cx = (region.minX + region.maxX) * 0.5
+        cy = (region.minY + region.maxY) * 0.5
+        tex = assets.get(mapTexturePath(cfg))
+        gen = 0
+    end
+
+    local imagePx = spanWorld * k
+    -- screen offset of the image's centre from the player: screen X
+    -- follows world +Y and screen Y runs against world +X, the orientation
+    -- worldmap.lua confirmed in game and capture.lua reproduces by
+    -- pointing the camera down with yaw 0
+    local ccx = half + (cy - player.y) * k
+    local ccy = half - (cx - player.x) * k
+    -- where the player sits inside the image, 0..1 - the pivot the whole
+    -- quad rotates about when the map turns with the camera
+    local pu = 0.5 + (player.y - cy) / spanWorld
+    local pv = 0.5 - (player.x - cx) / spanWorld
+
+    drawTerrain(tex, gen, live, ccx - imagePx * 0.5, ccy - imagePx * 0.5,
+                imagePx, pu, pv, rotate, player.yaw)
+    if not live then reportTextureSize(tex, cfg, imagePx, size) end
 
     -- player marker: always centred, rotated to show facing when the map
     -- itself is not rotating
@@ -715,10 +879,13 @@ function M.update(cfg, player, marks, count)
     for i = 1, count do
         if used >= limit then break end
         local m = marks[i]
-        local u, v = worldmap.toUV(m.x, m.y, region)
-        if u ~= nil then
-            local dx = (u - pu) * imagePx
-            local dy = (v - pv) * imagePx
+        -- Straight world delta, in the same frame as the terrain above:
+        -- screen X follows world +Y, screen Y runs against world +X. No
+        -- map region involved, so a marker in a dungeon lands where it
+        -- belongs instead of wherever the fallback region put it.
+        if type(m.x) == "number" and type(m.y) == "number" then
+            local dx = (m.y - player.y) * k
+            local dy = (player.x - m.x) * k
             if rotate then
                 dx, dy = dx * cosA - dy * sinA, dx * sinA + dy * cosA
             end

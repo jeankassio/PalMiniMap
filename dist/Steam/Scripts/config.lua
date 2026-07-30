@@ -23,13 +23,56 @@ local DEFAULTS = {
     opacity            = 0.92,
     circular           = false,
 
-    -- Terrain sharpness. The map is the game's own texture magnified, so
-    -- the only thing that decides how sharp it looks is which mip level
-    -- the streamer keeps resident - see tune() in assets.lua.
-    --   0 leave the streamer alone (lowest VRAM, softest terrain)
-    --   1 keep the world map texture fully resident
-    --   2 same as 1 today (see below)
-    --   3 ...plus trilinear filtering and no streaming mip bias
+    -- WHERE THE TERRAIN COMES FROM. One checkbox since 2.3.3 - it was a
+    -- three-way 0 auto / 1 live / 2 map, which asked the player to
+    -- understand a distinction the mod can make for itself.
+    --   true  - the second render (capture.lua): the world as it actually
+    --           is, from above, including dungeons and everywhere the
+    --           painted map has no coverage.
+    --   false - the game's own world map texture, i.e. 2.0-2.2 behaviour.
+    liveTerrain        = true,
+    -- The ONE exception to the checkbox, and it is not a hedge: THE LIVE
+    -- RENDER CAN ONLY SHOW WHAT THE GAME HAS STREAMED IN. Megazoom is
+    -- 260 000 world units across - over two kilometres - and most of that
+    -- is not loaded, so a capture there is mostly empty ground while the
+    -- painted map shows the whole island perfectly. Above this zoom the
+    -- terrain falls back to the texture even with the box ticked. Raise it
+    -- to match `megazoom` if you would rather always have the live render.
+    liveZoomMax        = 60000,
+
+    -- How the live render is taken. Each of these is the FIRST source of a
+    -- chain, not a fixed choice: capture.lua measures what came back and
+    -- steps to the next one if it cannot be drawn (see the long alpha note
+    -- in that file).
+    --   0 lit  - ask for SCS_SceneColorSceneDepth: the lit world, and the
+    --            ONE source that comes back opaque, because it puts scene
+    --            depth in the alpha channel where every other source puts
+    --            a translucency that is zero over solid ground.
+    --   1 flat - ask for SCS_BaseColor first: no lighting at all, so the
+    --            minimap would read the same at midnight as at noon. Nicer
+    --            when it works, but on stock Palworld it renders at alpha
+    --            0 and EXPECT IT TO FALL BACK to the lit source above,
+    --            after a few seconds of blank minimap per step.
+    captureStyle       = 0,
+    -- How far above the player the camera sits. THIS IS WHAT MAKES CAVES
+    -- WORK: an orthographic camera does not render what is behind it, so
+    -- the ceiling above this height is simply not in the picture. It does
+    -- NOT change the scale - orthographic - only what gets clipped away.
+    captureHeight      = 1500,
+    -- How often the second render runs, at most. 250 ms is four renders a
+    -- second; 1.x did sixty. Raise it if the GPU is the bottleneck.
+    captureIntervalMs  = 250,
+
+    -- Terrain sharpness, and it means two things because there are two
+    -- terrain sources:
+    --   live render - the render target's resolution: 256 / 384 / 512 /
+    --                 768 px square for levels 0..3. This is what the
+    --                 setting meant in 1.x.
+    --   map texture - which mip the streamer keeps resident, since that
+    --                 image is magnified several times across the window:
+    --                 0 leave the streamer alone (softest), 1-2 keep it
+    --                 fully resident, 3 plus trilinear and no mip bias.
+    --                 See tune() in assets.lua.
     --
     -- 2 used to force every ICON's full mip chain resident as well. That
     -- was a mistake: icons are drawn at eighteen pixels, so those mips are
@@ -39,7 +82,15 @@ local DEFAULTS = {
     mapQuality         = 2,
     -- Escape hatch: point this at a different map asset if a game update
     -- ever ships a more detailed one. Empty = the stock T_WorldMap.
+    -- Affects the map-texture source only.
     terrainTexture     = "",
+
+    -- What language the F5 menu is written in. Empty or "auto" asks the
+    -- GAME (see i18n.lua) and follows whatever the player set in its own
+    -- options; a culture code such as "pt-BR" or "en" forces one. No menu
+    -- row on purpose - this is an escape hatch for a build where the
+    -- detection answers wrongly, not a setting worth a slider.
+    menuLanguage       = "",
 
     -- how much of the world the window shows, in world units across
     zoom               = 22000,
@@ -88,19 +139,22 @@ local DEFAULTS = {
     showChests         = true,
     showEggs           = true,
     showNotes          = true,
-    showEffigies       = false,
+    showEffigies       = true,
     showSkillFruit     = true,
     showFastTravel     = true,
     showBaseCamps      = true,
     showEnemyCamps     = true,
 
-    -- 2.2.18: things the game's own compass marks. All OFF by default -
-    -- ore and junk are numerous, and maxPoiIcons is shared by distance
-    -- across every kind, so leaving these on would crowd chests, dungeons
-    -- and fast travel points off the minimap.
-    showResources      = false,   -- ore, stat-fruit lotuses, forage, junk
-    showFishing        = false,
-    showTreasureMaps   = false,
+    -- Things the game's own compass marks. These shipped OFF in 2.2.18 and
+    -- are ON now, so the trade-off they were off FOR is live and worth
+    -- stating: `maxPoiIcons` is one budget shared by DISTANCE across every
+    -- static kind, and ore/forage/junk are numerous, so with these on a
+    -- resource-dense area can push chests, dungeons and fast travel points
+    -- off the minimap. Raising `maxPoiIcons` is the lever if that happens
+    -- (it resizes the icon pool, so it costs a rebuild and some widgets).
+    showResources      = true,   -- ore, stat-fruit lotuses, forage, junk
+    showFishing        = true,
+    showTreasureMaps   = true,
     showDungeons       = true,
     showTowers         = true,
     showDeaths         = true,
@@ -121,6 +175,11 @@ local DEFAULTS = {
     -- last, always the NPCs, without saying so. Smaller than the pal budget
     -- because a crowd of villagers is scenery, not information.
     maxNpcIcons        = 24,
+    -- Other players. Always 0 in singleplayer (the local player is
+    -- excluded by name), which is why this list went unbudgeted until
+    -- 2.3.3 - see addPlayer() in sources.lua. Counted in the icon pool
+    -- like the other three.
+    maxPlayerIcons     = 16,
 }
 
 local current = nil
@@ -196,6 +255,16 @@ local function merge(stored)
         else
             if type(s) == type(v) then out[k] = s else out[k] = v end
         end
+    end
+
+    -- 2.3.3: the three-way `mapSource` became the `liveTerrain` checkbox.
+    -- An upgrading player's file still says `mapSource`, and merge() only
+    -- looks at keys that are in DEFAULTS, so without this their choice
+    -- would silently revert to the default. Only applied when the new key
+    -- is absent, so it cannot overwrite a decision made since.
+    if stored ~= nil and stored.liveTerrain == nil
+       and type(stored.mapSource) == "number" then
+        out.liveTerrain = stored.mapSource ~= 2      -- 0 auto / 1 live -> on
     end
     return out
 end

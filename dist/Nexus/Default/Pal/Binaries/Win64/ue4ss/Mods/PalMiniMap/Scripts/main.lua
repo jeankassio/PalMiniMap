@@ -1,9 +1,13 @@
 -- =====================================================================
--- PalMiniMap 2.2.20 - a native minimap for Palworld
+-- PalMiniMap 2.3.3 - a native minimap for Palworld
 --
--- No blueprint, no .pak, no shipped assets. The whole mod is this Lua
--- script driving UMG through UE4SS reflection, drawing the game's own
--- world map texture and the game's own icon textures.
+-- No blueprint, no .pak, no cooked content. The whole mod is this Lua
+-- script driving UMG through UE4SS reflection. Since 2.3 the terrain is a
+-- SECOND, THROTTLED RENDER of the world from above (capture.lua), so it
+-- works inside dungeons and at the edges of the world where the game's
+-- painted map has nothing; the game's own map texture is still there for
+-- the zoomed-right-out view, where too little of the world is streamed in
+-- to render.
 --
 -- Keys:  F1 megazoom  F2 corner  F3 show/hide  F4 edit  F5 menu  +/- zoom
 --
@@ -121,12 +125,13 @@ end
 local config   = needModule("config")
 local worldmap = needModule("worldmap")
 local assets   = needModule("assets")
+local capture  = needModule("capture")
 local render   = needModule("render")
 local sources  = needModule("sources")
 local menu     = needModule("menu")
 local gameui   = needModule("gameui")
 local uiprobe  = needModule("uiprobe")
-if config == nil or worldmap == nil or assets == nil
+if config == nil or worldmap == nil or assets == nil or capture == nil
    or render == nil or sources == nil or menu == nil or gameui == nil
    or uiprobe == nil then
     guard.log("PalMiniMap is disabled for this session (missing module above).")
@@ -278,12 +283,14 @@ end
 -- x, y, yaw, speed of the local player, or nil while the world is not
 -- playable. Computed at most once per pump tick and shared by every
 -- sub-tick that needs it.
-local frameStateBuf = { x = 0, y = 0, yaw = 0, speed = 0, pawn = nil }
+local frameStateBuf = { x = 0, y = 0, z = 0, yaw = 0, speed = 0, pawn = nil }
 
 local function readPlayerState()
     local pawn = playerPawn()
     if pawn == nil then return nil end
-    local x, y = sources.actorLocation(pawn)
+    -- Z is read here for the live terrain capture, which puts its camera a
+    -- fixed height above the player; nothing else in the mod uses it.
+    local x, y, z = sources.actorLocation3(pawn)
     if x == nil then return nil end
     local yaw = 0.0
     local pc = playerController()
@@ -301,7 +308,7 @@ local function readPlayerState()
     -- reused: this table is rebuilt ten times a second and never escapes
     -- the tick that made it
     local st = frameStateBuf
-    st.x, st.y, st.yaw, st.speed, st.pawn = x, y, yaw, speed, pawn
+    st.x, st.y, st.z, st.yaw, st.speed, st.pawn = x, y, z, yaw, speed, pawn
     return st
 end
 
@@ -581,14 +588,36 @@ local function movementTick()
     if hide then return end
 
     local zoom = render.effectiveZoom(cfg, p.speed)
+
+    -- THE SECOND RENDER, and note where it sits: AFTER the hide check, so
+    -- nothing is rendered while the minimap is not on screen, and before
+    -- the "nothing changed" shortcut below, so the world still refreshes
+    -- while the player stands still. capture.lua decides whether this tick
+    -- is actually one of the few a second that costs anything; when it is
+    -- not, this is a handful of arithmetic.
+    --
+    -- Deliberately NOT behind settled(). That quiet window exists to keep
+    -- the mod away from OTHER actors while a fast travel destroys and
+    -- rebuilds everything around the player; this touches only our own
+    -- component and the player's own pawn, both re-validated every tick.
+    -- Gating it would leave the minimap showing a picture of where the
+    -- player USED to be for ten seconds after every teleport, which is the
+    -- same mistake 2.0.5 made by skipping the whole draw. A teleport is a
+    -- huge jump, so the first tick after it re-captures on its own.
+    local captured = false
+    if cfg.liveTerrain then
+        captured = capture.update(cfg, p.pawn, p.x, p.y, p.z, zoom, os.clock())
+    end
+
     local sourceVersion = sources.version()
     local dirty = sources.staticDirty()
 
     -- If neither the player state nor the source data changed, there is
     -- nothing new to push through render.update(). Skipping the whole path
     -- here removes a lot of idle churn when the minimap is open but the
-    -- player is standing still.
-    if not dirty
+    -- player is standing still. A fresh capture counts as a change: the
+    -- quad has to move to wherever the new image is centred.
+    if not dirty and not captured
        and sourceVersion == lastDrawSourceVersion
        and p.x == lastDrawX and p.y == lastDrawY
        and p.yaw == lastDrawYaw and p.speed == lastDrawSpeed
@@ -650,6 +679,7 @@ local function maintenanceTick()
         render.destroy()
         sources.forget()
         assets.forget()           -- every UObject we cached died with it
+        capture.forget()          -- ...including the capture and its target
         lastDrawSourceVersion = -1
         cachedPC = nil
         forgetGameMenu()
@@ -661,6 +691,7 @@ local function maintenanceTick()
         render.destroy()
         sources.forget()
         assets.forget()
+        capture.forget()
         lastDrawSourceVersion = -1
         menu.worldChanged(name)   -- the menu widget died with the old world
         worldmap.recalibrate()
@@ -836,15 +867,35 @@ local REBUILD_KEYS = {
 }
 
 menu.onCommit = function(keys)
-    local rebuild, relayout, rescan = false, false, false
+    local rebuild, relayout, rescan, redraw = false, false, false, false
     for _, key in ipairs(keys) do
         if REBUILD_KEYS[key] then
             rebuild = true
             -- the icon caps are applied at scan time, so the new limit
             -- only shows up once the world has been looked at again
             rescan = true
-        elseif key == "mapQuality" then
+        elseif key == "mapQuality" or key == "captureStyle"
+            or key == "captureHeight" then
+            -- All three change how the second render is set up, so the
+            -- render target and the component are rebuilt at the new
+            -- settings. applyQuality also still pins the map texture's
+            -- mips, which is what this key meant before 2.3.
             render.applyQuality(cfg)
+            redraw = true
+        elseif key == "liveTerrain" or key == "liveZoomMax" then
+            -- Nothing to rebuild - but if the player is standing still,
+            -- the draw path would skip the frame that would have shown
+            -- them the change.
+            --
+            -- Unticking it also lets the capture component and its render
+            -- target go. They cost nothing per frame once nobody calls
+            -- update() (bCaptureEveryFrame is false), but the target is
+            -- several megabytes of VRAM held for a feature now switched
+            -- off, and destroy() is the only thing that frees it.
+            if key == "liveTerrain" and not cfg.liveTerrain then
+                capture.destroy()
+            end
+            redraw = true
         elseif key == "opacity" then relayout = true
         elseif key == "enabled" then render.setVisible(cfg.enabled)
         elseif key:sub(1, 4) == "show" or key == "onlyShinyPals"
@@ -857,8 +908,12 @@ menu.onCommit = function(keys)
     end
     if rescan then
         sources.forget()   -- the per-kind caches rebuild on the next tick
-        lastDrawSourceVersion = -1
+        redraw = true
     end
+    -- The draw path skips a tick where nothing about the player or the
+    -- world data changed, so anything that only changes how things are
+    -- DRAWN has to invalidate that comparison itself.
+    if redraw then lastDrawSourceVersion = -1 end
     if rebuild then
         requestRebuild()
     elseif relayout then
@@ -1065,7 +1120,11 @@ local function pump()
     end
     if wantMenu then
         lastMenu = now
-        guard.try("menuPoll", function() menu.poll(cfg) end)
+        -- ARGUMENTS, NOT A CLOSURE. This was the only guard.try in the
+        -- pump still wrapping its call in a fresh function, which is a
+        -- garbage object every poll while the menu is open - the exact
+        -- idiom the 2.0.9 stutter work removed everywhere else.
+        guard.try("menuPoll", menu.poll, cfg)
     end
     if wantScan then
         lastScan = now
@@ -1107,6 +1166,7 @@ guard.register("world transition hook", function()
         render.destroy()
         sources.forget()
         assets.forget()
+        capture.forget()
         lastDrawSourceVersion = -1
         cachedPC = nil
         forgetGameMenu()
@@ -1148,4 +1208,4 @@ guard.register("pump loop", function()
     LoopAsync(PUMP_MS, guard.loopBody("pump", pump, anythingDue))
 end)
 
-guard.log("PalMiniMap 2.2.20 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
+guard.log("PalMiniMap 2.3.3 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
