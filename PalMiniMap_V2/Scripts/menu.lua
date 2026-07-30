@@ -70,7 +70,7 @@ local LAYOUT = {
     { key = "opacity",           label = "Opacity",                  kind = "pct" },
     { key = "circular",          label = "Circular shape",           kind = "bool" },
     { key = "mapSource",         label = "Terrain: 0 auto, 1 live render, 2 game map", kind = "int", min = 0, max = 2 },
-    { key = "captureStyle",      label = "Live render: 0 flat, 1 lit",  kind = "int", min = 0, max = 1 },
+    { key = "captureStyle",      label = "Live render: 0 lit, 1 flat (may fall back)", kind = "int", min = 0, max = 1 },
     { key = "mapQuality",        label = "Terrain quality (0 low - 3 sharp)", kind = "int", min = 0, max = 3 },
     { key = "zoom",              label = "Zoom (world units)",       kind = "int", min = 4000, max = 120000, step = 1000 },
     { key = "megazoom",          label = "Megazoom (F1) range",      kind = "int", min = 60000, max = 500000, step = 10000 },
