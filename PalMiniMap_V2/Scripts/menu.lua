@@ -82,6 +82,9 @@ local LAYOUT = {
     { key = "autohideInBase",    label = "Hide while in a base camp", kind = "bool" },
     { key = "iconSize",          label = "Icon size",                kind = "int", min = 10, max = 40 },
     { key = "playerIconSize",    label = "Player marker size",       kind = "int", min = 10, max = 48 },
+    { key = "showViewCone",      label = "Show camera view cone",     kind = "bool" },
+    { key = "viewConeOpacity",   label = "View cone opacity",          kind = "pct" },
+    { key = "viewConeSize",      label = "View cone radius",           kind = "pct" },
 
     { header = "Pals" },
     { key = "showPals",          label = "Show pals",                kind = "bool" },

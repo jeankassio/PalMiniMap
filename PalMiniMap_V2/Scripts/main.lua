@@ -280,10 +280,10 @@ local function playerPawn()
     return nil
 end
 
--- x, y, yaw, speed of the local player, or nil while the world is not
+-- x, y, camera yaw, body yaw and speed of the local player, or nil while the world is not 
 -- playable. Computed at most once per pump tick and shared by every
 -- sub-tick that needs it.
-local frameStateBuf = { x = 0, y = 0, z = 0, yaw = 0, speed = 0, pawn = nil }
+local frameStateBuf = { x = 0, y = 0, z = 0, yaw = 0, bodyYaw = 0, speed = 0, pawn = nil }
 
 local function readPlayerState()
     local pawn = playerPawn()
@@ -292,11 +292,17 @@ local function readPlayerState()
     -- fixed height above the player; nothing else in the mod uses it.
     local x, y, z = sources.actorLocation3(pawn)
     if x == nil then return nil end
+    -- Camera/control yaw drives the terrain rotation and view cone. Actor
+    -- yaw is kept separately so the small player arrow shows the character's
+    -- body direction, as in Genshin Impact and Wuthering Waves.
     local yaw = 0.0
     local pc = playerController()
     local y2 = pc and guard.get(rawControlRotation, pc) or nil
     if type(y2) ~= "number" then y2 = guard.get(rawActorYaw, pawn) end
     if type(y2) == "number" then yaw = y2 end
+
+    local bodyYaw = guard.get(rawActorYaw, pawn)
+    if type(bodyYaw) ~= "number" then bodyYaw = yaw end
     -- speed drives autozoom; velocity is centimetres per second.
     -- pcall directly, not guard.get: guard.get returns only the FIRST
     -- result and this needs three.
@@ -308,7 +314,9 @@ local function readPlayerState()
     -- reused: this table is rebuilt ten times a second and never escapes
     -- the tick that made it
     local st = frameStateBuf
-    st.x, st.y, st.z, st.yaw, st.speed, st.pawn = x, y, z, yaw, speed, pawn
+    st.x, st.y, st.z = x, y, z
+    st.yaw, st.bodyYaw = yaw, bodyYaw
+    st.speed, st.pawn = speed, pawn
     return st
 end
 
@@ -620,7 +628,8 @@ local function movementTick()
     if not dirty and not captured
        and sourceVersion == lastDrawSourceVersion
        and p.x == lastDrawX and p.y == lastDrawY
-       and p.yaw == lastDrawYaw and p.speed == lastDrawSpeed
+       and p.yaw == lastDrawYaw and p.bodyYaw == lastDrawBodyYaw
+       and p.speed == lastDrawSpeed
        and zoom == lastDrawZoom then
         return
     end
@@ -634,7 +643,9 @@ local function movementTick()
     if settled() then marks, count = sources.collect(cfg, p.x, p.y, zoom) end
     render.update(cfg, p, marks, count)
 
-    lastDrawX, lastDrawY, lastDrawYaw, lastDrawSpeed, lastDrawZoom = p.x, p.y, p.yaw, p.speed, zoom
+    lastDrawX, lastDrawY = p.x, p.y
+    lastDrawYaw, lastDrawBodyYaw = p.yaw, p.bodyYaw
+    lastDrawSpeed, lastDrawZoom = p.speed, zoom
     lastDrawSourceVersion = sourceVersion
 end
 
@@ -897,6 +908,11 @@ menu.onCommit = function(keys)
             end
             redraw = true
         elseif key == "opacity" then relayout = true
+        elseif key == "showViewCone" or key == "viewConeOpacity"
+            or key == "viewConeSize" then
+            -- These are pure draw settings. Force one update even while the
+            -- player is standing still so the F5 change is visible at once.
+            redraw = true
         elseif key == "enabled" then render.setVisible(cfg.enabled)
         elseif key:sub(1, 4) == "show" or key == "onlyShinyPals"
             or key == "hideCollected" or key == "megazoom"
@@ -1003,7 +1019,8 @@ local MENU_MS   = 250
 local MAINT_MS  = 2000
 
 local lastMove, lastScan, lastMenu, lastMaint = 0.0, 0.0, 0.0, 0.0
-local lastDrawX, lastDrawY, lastDrawYaw, lastDrawSpeed, lastDrawZoom = nil, nil, nil, nil, nil
+local lastDrawX, lastDrawY, lastDrawYaw, lastDrawBodyYaw = nil, nil, nil, nil
+local lastDrawSpeed, lastDrawZoom = nil, nil
 local lastDrawSourceVersion = -1
 
 -- ---------------------------------------------------------------
@@ -1208,4 +1225,4 @@ guard.register("pump loop", function()
     LoopAsync(PUMP_MS, guard.loopBody("pump", pump, anythingDue))
 end)
 
-guard.log("PalMiniMap 2.3.3 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
+guard.log("PalMiniMap 2.3.3 + view cone loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
