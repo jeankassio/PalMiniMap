@@ -579,6 +579,49 @@ Caching the actor and re-reading `collected` off it would be cheaper still, and
 is deliberately not done: it means holding actor references indefinitely, and
 every native crash this mod has had came from exactly that.
 
+## Left running for hours: the soak test (2.3.4)
+
+`scratchpad/soaktest.py` drives the **real `main.lua`** through a simulated
+multi-hour session against a full UE4SS fake and a stubbed clock, in a
+throwaway copy of `Scripts/`. It does not ask whether the mod works — the other
+harnesses do that — it asks whether anything **accumulates**, because every
+native crash this mod has had was a slow one.
+
+Measured over two simulated hours:
+
+| | |
+|---|---|
+| an hour of walking | **zero widgets built, heap flat at 917 KB** |
+| 12 identical menu/edit cycles | **exactly 221 widgets each, every time** |
+| the whole activity round, twice | heap **+183 KB** then **+30 KB** |
+| capture components / render targets | one per world, released with the pawn |
+| `FHitResult` setters | **0** for the whole session |
+
+That second-round number is the leak test: a cache that had to fill charges
+once and converges, a leak charges again. The `--control leak` run — one padded
+entry appended per player per scan — fails four assertions including the
+quiet-hour one, and ends at 4894 KB against 1137 KB.
+
+**Standing still, walks of the object array per minute**, against a control
+that restores the old rotation:
+
+| | 2.3.4 | before |
+|---|---|---|
+| chests (a static kind) | **0.2** | 1.1 |
+| all classes | **32.7** | 45.0 |
+| characters, of that | 15.0 | 15.0 |
+
+The first cut of the static change made chests *worse* — 2.3/min — because
+skipping fresh kinds let the collectible kinds come round every 20 s instead of
+waiting their turn in a fifteen-kind rotation. `INTERACT_RANGE` fixed it: a
+collectible kind is re-walked only where the player is close enough to have
+taken one. **The total alone would have hidden that regression inside an
+improvement**, which is why the harness counts per class.
+
+The character scan is deliberately unchanged and is what dominates a stationary
+session. Pals move; that one cannot be skipped, and the test asserts it is still
+running so the claim above is never overstated.
+
 ## Hiding behind the game's own screens (2.2.11)
 
 Seven attempts. This is the first one built on **measurement** instead of on

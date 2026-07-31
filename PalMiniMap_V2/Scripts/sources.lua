@@ -1938,6 +1938,26 @@ local rotation = 1
 local RESCAN_DISTANCE = 12000.0     -- world units travelled since the pass
 local RESCAN_COLLECTIBLE = 20.0     -- seconds, kinds whose markers can be taken
 local RESCAN_SECONDS = 300.0        -- seconds, everything else
+-- How close the player has to be to one of a kind's own markers for the
+-- collectible re-check to be worth doing at all. You cannot open a chest
+-- from across the island, so if none is within reach nothing of that kind
+-- can have changed and the walk is pure waste. Generous, because the
+-- cached position is where the marker was, not where the player's reach
+-- ends, and being late to clear a marker is worse than one extra walk.
+local INTERACT_RANGE = 6000.0
+
+-- Is the player near enough to any marker of this kind to have taken one?
+local function nearAnyMarker(kind, px, py)
+    local list = kindCache[kind]
+    if list == nil then return false end
+    local r2 = INTERACT_RANGE * INTERACT_RANGE
+    for i = 1, #list do
+        local p = list[i]
+        local dx, dy = px - p.x, py - p.y
+        if (dx * dx + dy * dy) <= r2 then return true end
+    end
+    return false
+end
 
 local function kindIsStale(spec, now, px, py)
     local seen = kindSeen[spec.kind]
@@ -1946,8 +1966,19 @@ local function kindIsStale(spec, now, px, py)
     if (dx * dx + dy * dy) > (RESCAN_DISTANCE * RESCAN_DISTANCE) then
         return true                              -- travelled: new chunks
     end
-    local gap = (spec.collected ~= nil) and RESCAN_COLLECTIBLE or RESCAN_SECONDS
-    return (now - seen.at) >= gap
+    if spec.collected ~= nil then
+        -- A collectible kind is re-checked often, but ONLY where the player
+        -- could actually have collected something. Skipping fresh kinds made
+        -- the collectibles come round far faster than the old fifteen-kind
+        -- rotation did, so without this the change traded a saving on the
+        -- rest for a cost on these - measured, not assumed: chest walks went
+        -- from 1.1/min to 2.3/min while standing still.
+        if (now - seen.at) < RESCAN_COLLECTIBLE then return false end
+        if nearAnyMarker(spec.kind, px, py) then return true end
+        -- Nothing of this kind within reach: fall through to the slow net,
+        -- so a marker can still never be stale for ever.
+    end
+    return (now - seen.at) >= RESCAN_SECONDS
 end
 
 local ACTORS_PER_STEP = 48
