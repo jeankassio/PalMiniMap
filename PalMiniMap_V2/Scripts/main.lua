@@ -1,5 +1,5 @@
 -- =====================================================================
--- PalMiniMap 2.3.3 - a native minimap for Palworld
+-- PalMiniMap 2.3.4 - a native minimap for Palworld
 --
 -- No blueprint, no .pak, no cooked content. The whole mod is this Lua
 -- script driving UMG through UE4SS reflection. Since 2.3 the terrain is a
@@ -131,9 +131,10 @@ local sources  = needModule("sources")
 local menu     = needModule("menu")
 local gameui   = needModule("gameui")
 local uiprobe  = needModule("uiprobe")
+local keys     = needModule("keys")
 if config == nil or worldmap == nil or assets == nil or capture == nil
    or render == nil or sources == nil or menu == nil or gameui == nil
-   or uiprobe == nil then
+   or uiprobe == nil or keys == nil then
     guard.log("PalMiniMap is disabled for this session (missing module above).")
     do return end
 end
@@ -146,6 +147,10 @@ if SCRIPT_DIR ~= nil then
 end
 
 config.setPath((SCRIPT_DIR or ".") .. "/../minimap_settings.json")
+-- config.ini lives beside the settings file, i.e. in the mod folder
+-- rather than inside Scripts/, so a player never has to open the
+-- script directory to rebind a key.
+local KEYS_PATH = (SCRIPT_DIR or ".") .. "/../config.ini"
 -- Where the settings landed while scriptDirectory() was returning nil: the
 -- game's working directory, i.e. Pal/Binaries. Read from there once so a
 -- player's existing layout, zoom and toggles survive the fix; the next save
@@ -680,7 +685,16 @@ end
 local function staticTick()
     if not settled() then return end
     if not staticDue and sources.staticFilling(cfg) then staticDue = true end
-    sources.stepStatic(cfg, staticDue)
+    -- The player position is what decides whether a static kind is worth
+    -- walking again: things only appear where the level has streamed in
+    -- something new, and that happens because we TRAVELLED. Standing still,
+    -- stepStatic now does nothing at all for most kinds.
+    local p = frameState
+    if p ~= nil then
+        sources.stepStatic(cfg, staticDue, p.x, p.y)
+    else
+        sources.stepStatic(cfg, staticDue)
+    end
     staticDue = false
 end
 
@@ -1192,29 +1206,37 @@ guard.register("world transition hook", function()
     end))
 end)
 
-local function bind(label, key, action)
+-- The keys come from config.ini beside the settings file - see keys.lua.
+-- The action names are the same strings the queue already carries, so a
+-- rebound key changes nothing downstream: the bind still only appends to
+-- the ring buffer, exactly as the threading rule requires.
+local boundKeys = nil
+
+local function bind(label, binding, action)
     guard.register(label, function()
-        RegisterKeyBind(key, guard.callback(label, function() request(action) end))
+        local cb = guard.callback(label, function() request(action) end)
+        -- Two shapes: with modifiers and without. The modifier form is only
+        -- attempted when the player actually asked for one, so a build that
+        -- reflects it differently costs nothing to anybody else.
+        if binding.mods ~= nil and #binding.mods > 0 then
+            local ok = pcall(RegisterKeyBind, binding.key, binding.mods, cb)
+            if ok then return end
+            guard.log("config.ini: this UE4SS build refused the modifier on "
+                .. binding.name .. "; binding the plain key instead")
+        end
+        RegisterKeyBind(binding.key, cb)
     end)
 end
 
 if type(Key) == "table" then
-    bind("config menu (F5)", Key.F5, "menu")
-    bind("megazoom (F1)", Key.F1, "megazoom")
-    bind("cycle corner (F2)", Key.F2, "corner")
-    bind("toggle minimap (F3)", Key.F3, "visible")
-    bind("edit mode (F4)", Key.F4, "edit")
-    -- UE4SS names the arrows *_ARROW; plain LEFT/RIGHT/UP/DOWN do not
-    -- exist, so 2.0.2 failed to bind all four and edit mode could never
-    -- be moved.
-    bind("edit move left",  Key.LEFT_ARROW,  "left")
-    bind("edit move right", Key.RIGHT_ARROW, "right")
-    bind("edit move up",    Key.UP_ARROW,    "up")
-    bind("edit move down",  Key.DOWN_ARROW,  "down")
-    bind("zoom in (+)",  Key.ADD,        "zoomIn")
-    bind("zoom in (=)",  Key.OEM_PLUS,   "zoomIn")
-    bind("zoom out (-)", Key.SUBTRACT,   "zoomOut")
-    bind("zoom out (_)", Key.OEM_MINUS,  "zoomOut")
+    boundKeys = keys.load(KEYS_PATH)
+    for i = 1, #keys.order() do
+        local action = keys.order()[i][1]
+        local list = boundKeys[action]
+        for j = 1, #list do
+            bind(action .. " (" .. list[j].name .. ")", list[j], action)
+        end
+    end
 else
     guard.log("the UE4SS 'Key' table is missing; keybinds are unavailable")
 end
@@ -1225,4 +1247,6 @@ guard.register("pump loop", function()
     LoopAsync(PUMP_MS, guard.loopBody("pump", pump, anythingDue))
 end)
 
-guard.log("PalMiniMap 2.3.3 + view cone loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
+guard.log("PalMiniMap 2.3.4 loaded - " ..
+    (boundKeys and keys.describe(boundKeys)
+     or "F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom"))

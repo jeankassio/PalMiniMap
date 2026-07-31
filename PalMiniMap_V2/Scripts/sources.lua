@@ -1901,8 +1901,54 @@ end
 -- been picked up since - and those go away on that kind's next turn.
 -- ---------------------------------------------------------------
 local kindCache = {}      -- kind -> { x, y, ... }  positions only
-local kindSeen = {}       -- kind -> true once scanned at least once
+-- kind -> { at = os.clock(), x = , y = } of the pass that filled it, or nil
+-- if the kind has never been walked in this world.
+local kindSeen = {}
 local rotation = 1
+
+-- ---------------------------------------------------------------
+-- SCAN ONCE, THEN ONLY WHEN SOMETHING COULD HAVE CHANGED (2.3.4)
+--
+-- Until now the rotation above never stopped: every static kind was walked
+-- again, `FindAllOf` and all, every few seconds for the whole session -
+-- fifteen full UObject-array walks per round, for lists that had not moved
+-- since the last round. Chests do not walk away.
+--
+-- Two things genuinely change, and they want different answers:
+--
+--   WHERE things are   changes only when the level streams in something
+--                      new, which happens because the player TRAVELLED.
+--                      So the trigger is distance, not time.
+--   WHETHER a thing is
+--   still there        changes when the player opens a chest or picks up
+--                      a note, and `collected` is read at scan time, so
+--                      only a re-walk clears it. That is the ONE reason a
+--                      standing-still player still needs re-scans - and
+--                      only for the four kinds that can be collected.
+--
+-- Hence a short interval for collectible kinds, a long safety net for the
+-- rest, and a distance trigger for both. Standing in a base, this takes
+-- the static scan from ~15 array walks a minute to zero.
+--
+-- The alternative - caching the actor and re-reading `collected` off it -
+-- would be cheaper still and is deliberately NOT done: it means holding
+-- actor references indefinitely, and every native crash this mod has had
+-- came from exactly that.
+-- ---------------------------------------------------------------
+local RESCAN_DISTANCE = 12000.0     -- world units travelled since the pass
+local RESCAN_COLLECTIBLE = 20.0     -- seconds, kinds whose markers can be taken
+local RESCAN_SECONDS = 300.0        -- seconds, everything else
+
+local function kindIsStale(spec, now, px, py)
+    local seen = kindSeen[spec.kind]
+    if seen == nil then return true end          -- never walked
+    local dx, dy = px - seen.x, py - seen.y
+    if (dx * dx + dy * dy) > (RESCAN_DISTANCE * RESCAN_DISTANCE) then
+        return true                              -- travelled: new chunks
+    end
+    local gap = (spec.collected ~= nil) and RESCAN_COLLECTIBLE or RESCAN_SECONDS
+    return (now - seen.at) >= gap
+end
 
 local ACTORS_PER_STEP = 48
 
@@ -1930,12 +1976,15 @@ local function wantedKind(cfg, spec)
     return false
 end
 
-local function beginKind(spec)
+local function beginKind(spec, px, py)
     local all = findAll(spec.class, spec.kind)
     cursor = {
         spec = spec, all = all, total = #all, index = 0,
         list = {}, count = 0,       -- built aside, swapped in when complete
         startedAt = os.clock(),
+        -- where the player was when this pass began, stamped onto
+        -- kindSeen when it completes
+        px = px, py = py,
     }
 end
 
@@ -1990,7 +2039,9 @@ local function stepKind(cfg)
 
     for j = #list, count + 1, -1 do list[j] = nil end
     kindCache[spec.kind] = list
-    kindSeen[spec.kind] = true
+    -- Remember WHEN and WHERE this pass ran, not just that it did:
+    -- kindIsStale() needs both to decide the kind is worth walking again.
+    kindSeen[spec.kind] = { at = os.clock(), x = c.px, y = c.py }
     cursor = nil
     return true
 end
@@ -2056,7 +2107,7 @@ end
 --
 -- `due` is the scan tick's signal that a full round is wanted (it fires at
 -- scanIntervalMs). Between rounds this returns immediately.
-function M.stepStatic(cfg, due)
+function M.stepStatic(cfg, due, px, py)
     if cursor ~= nil then
         if stepKind(cfg) then
             S.staticDirty = true
@@ -2071,13 +2122,24 @@ function M.stepStatic(cfg, due)
     -- them can be retired in one go.
     local changed = false
     local checked = 0
+    local now = os.clock()
+    -- Without a player position there is nothing to measure travel against,
+    -- so fall back to the kind's own position, which makes the first pass
+    -- happen and later ones wait for the timer.
+    px = tonumber(px) or 0.0
+    py = tonumber(py) or 0.0
     while checked < #STATIC_KINDS do
         local spec = STATIC_KINDS[rotation]
         rotation = (rotation % #STATIC_KINDS) + 1
         checked = checked + 1
         if wantedKind(cfg, spec) then
-            beginKind(spec)
-            break
+            -- THE WHOLE POINT: a kind that was walked recently and near
+            -- here is skipped entirely, so a standing player costs no
+            -- object-array walks at all.
+            if kindIsStale(spec, now, px, py) then
+                beginKind(spec, px, py)
+                break
+            end
         elseif kindCache[spec.kind] ~= nil then
             kindCache[spec.kind] = nil     -- turned off: drop its markers
             kindSeen[spec.kind] = nil
@@ -2097,7 +2159,7 @@ end
 -- the minimap populates quickly instead of one class every four seconds.
 function M.staticFilling(cfg)
     for _, spec in ipairs(STATIC_KINDS) do
-        if wantedKind(cfg, spec) and not kindSeen[spec.kind] then return true end
+        if wantedKind(cfg, spec) and kindSeen[spec.kind] == nil then return true end
     end
     return false
 end

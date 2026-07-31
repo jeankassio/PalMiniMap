@@ -77,7 +77,37 @@ corrects itself if a game update moves the world.
 | `F5` | configuration menu |
 | `+` / `-` | zoom |
 
-Same layout as 1.x, deliberately.
+Same layout as 1.x, deliberately — and since 2.3.4 all of it is rebindable.
+
+### Rebinding: `config.ini` (2.3.4)
+
+The mod writes `config.ini` beside `minimap_settings.json` on first run, with
+the defaults in it and comments explaining the format, so there is something to
+edit rather than a syntax to guess:
+
+```ini
+[keys]
+menu      = F5                     ; open and close the settings menu
+megazoom  = F1                     ; toggle megazoom
+zoomIn    = ADD, OEM_PLUS          ; several keys may share one action
+```
+
+**Key names are UE4SS's own**, taken straight from its global `Key` table — so
+anything that build knows works (`F1`..`F12`, `A`..`Z`, `TAB`, `NUM_ONE`,
+`LEFT_ARROW`, `OEM_PLUS`, …) and there is no list here to fall out of date. A
+`CTRL+`, `ALT+` or `SHIFT+` prefix is accepted and resolved against
+`ModifierKey` the same way. Action and key names are matched **without case**.
+
+Anything unusable is reported by name in the log and that action keeps its
+default — a bad line never leaves the mod with a dead key. The file is in
+`.gitignore` and must never be packaged, for the same reason
+`minimap_settings.json` must not be: shipping it overwrites the player's own
+bindings on every manual update.
+
+Why a file and not a menu row: capturing "press the key you want" means hooking
+input while a widget has focus, which is exactly the input-thread work the
+threading rule forbids. The binds themselves are unchanged — they still only
+append an action name to the ring buffer.
 
 ### The menu follows the game's language (2.3.3)
 
@@ -485,6 +515,69 @@ Twenty-six variants remain unreachable because no base portrait exists anywhere
 — `ElecLion` and `DarkMutant` among them, whose rows in the game's own icon data
 table point at textures that are not in the pak at all. Nothing can be drawn for
 those but the generic marker.
+
+## The native crash was `FHitResult`, and the log said so 1419 times (2.3.4)
+
+`EXCEPTION_ACCESS_VIOLATION reading 0x00006e9e00000038` — a garbage pointer, not
+a null one — about seventeen minutes into a session. The entire diagnosis was
+already in `UE4SS.log`, in a message that is not even an error:
+
+```
+[push_weakobjectproperty] Operation::Set is not supported      x1419, in bursts of 3
+```
+
+**Three**, because that is how many weak object pointers an `FHitResult` carries
+(its component, its hit-actor handle and its physical material). Every
+`K2_SetWorld*` takes one as an out parameter, and passing a plain Lua table for
+it makes UE4SS walk the struct and fail on those three. The first burst landed
+four seconds after *"capture positioned via K2_SetWorldLocationAndRotation"*,
+the gaps between bursts (0.5–4.0 s) were this mod's capture cadence exactly,
+1419 / 3 = 473 captures, and **the last line before the crash was one of them**.
+
+`K2_SetWorldLocationAndRotationNoPhysics` is not in the shipping exe at all, and
+every other `K2_Set*Location`/`Rotation` carries the same parameter — so the fix
+is not a different call, it is **no call**. The component is created
+`AddComponentByClass`-**attached** to the pawn's root, which means the engine was
+already carrying it: the placement call was redoing by hand, four times a second,
+what the attachment does for free. Setting the relative transform once, plus
+`bAbsoluteRotation` so the camera keeps pointing down however the pawn turns, is
+all the attached route ever needed.
+
+Struct *property* writes are not proven on this build the way struct function
+*arguments* are, so it is self-checked rather than assumed: after the first
+capture the component's own world location is read back with
+`K2_GetComponentLocation` — a plain getter, nothing to marshal — and compared
+against the player. If it is not tracking, the old call comes back for the
+session and says so in the log.
+
+**Method worth repeating:** `sed 's/[0-9]\+/N/g' | sort | uniq -c | sort -rn`
+over the whole log. It put 1419 of one message against about five of everything
+else in one line of output. (The two `[FCallbackGarbageCollector] Freed invalid
+callbacks!` were startup noise — without the `Ref was not function` line beside
+them they are *not* the 2.0.5 registry race.)
+
+## Statics are scanned once, not for ever (2.3.4)
+
+`stepStatic`'s rotation never stopped: about fifteen full `FindAllOf` walks per
+round, every few seconds, for the whole session — for lists that cannot move.
+Chests do not walk away.
+
+Two things genuinely change, and they want different triggers. **Where** things
+are changes only when the level streams in something new, which happens because
+the player *travelled* — so that trigger is distance, not time. **Whether** a
+thing is still there changes when a chest is opened or a note picked up, and
+`collected` is read at scan time, so only a re-walk clears it — and that is the
+one reason a standing player still needs re-scans, for the four collectible
+kinds only.
+
+So `kindSeen` now records *when and where* each pass ran, and a kind is walked
+again only if it has never been walked, the player has travelled 12 000 uu since,
+or its interval has elapsed — 20 s for collectible kinds, 300 s for the rest.
+Standing in a base, the static scan now costs **zero** object-array walks.
+
+Caching the actor and re-reading `collected` off it would be cheaper still, and
+is deliberately not done: it means holding actor references indefinitely, and
+every native crash this mod has had came from exactly that.
 
 ## Hiding behind the game's own screens (2.2.11)
 

@@ -6,3 +6,6 @@ PalMiniMap_V2/build/
 # sincronizacao da Workshop - foi o bug de "as configuracoes voltam
 # ao padrao ao reabrir o jogo".
 minimap_settings.json
+# written by the mod on first run, like the settings file: packaging it
+# would overwrite the player's own key bindings on every manual update
+config.ini
