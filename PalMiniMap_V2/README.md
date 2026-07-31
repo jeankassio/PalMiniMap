@@ -622,6 +622,49 @@ The character scan is deliberately unchanged and is what dominates a stationary
 session. Pals move; that one cannot be skipped, and the test asserts it is still
 running so the claim above is never overstated.
 
+## White squares around monsters, and the egg that stayed (2.3.5)
+
+Two in-game reports, one line of code apart in spirit.
+
+**"fica um quadrado branco por muito tempo em volta de algum monstro."** A UMG
+Image with no brush is drawn by Slate as a plain white box, and `render.lua`
+decides whether a pool slot is shown with `entry.tex ~= nil`. It wrote that
+field *before* calling the setter:
+
+```lua
+entry.tex = brushPath              -- "this slot is showing brushPath"
+pcall(rawSetBrush, entry.image, brushTex)   -- ...if this worked
+```
+
+A setter that refused therefore left the slot **visible with nothing on it**,
+and the equality test then stopped it ever being retried — so it stayed white
+until that slot happened to be reused for a different marker. The same line has
+a quieter second symptom: a slot reused for a refused texture keeps the
+*previous* marker's picture, so a FoxMage wears an Alpaca's portrait. Both go
+away by latching only on success.
+
+**This is the third time this exact bug has shipped** — the terrain quad's
+generation in 2.3.3, the circular strips' generation beside it, and now the
+icons. The rule, written down properly this time: never record "this is
+applied" before the apply has returned.
+
+**"coletei um ovo, e ele não sumiu do minimapa."** `hideCollected` judged eggs
+with `bPickedInClient`, which lives on `PalLevelObjectObtainable` — the base of
+**Note and Relic only**. In the usmap, `PalMapObjectPalEgg` has exactly one
+property, `ParameterComponent`: there is no pickup flag on the actor at all, so
+the read raised and the answer was always "not taken".
+
+That is the 2.2.19 chest bug in a second hierarchy, and it takes the same shape
+of fix — **the state is on the model, not the actor**. A chest has its own
+`PalMapObjectTreasureBoxModel.bOpened`; an egg's model has no flag of its own
+but inherits `PalMapObjectConcreteModelBase.bDisposed`, which is what a consumed
+pickup sets. Unreadable still means *not* taken, because the inverse empties the
+map — the 2.0.6 mistake this project keeps having to re-learn.
+
+So that a collected marker disappears while you are still standing over it,
+collectible kinds are re-checked after 5 s when one of their markers is within
+reach, and otherwise left for 60 s.
+
 ## Hiding behind the game's own screens (2.2.11)
 
 Seven attempts. This is the first one built on **measurement** instead of on

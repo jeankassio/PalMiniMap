@@ -1,5 +1,5 @@
 -- =====================================================================
--- PalMiniMap 2.3.4 - a native minimap for Palworld
+-- PalMiniMap 2.3.5 - a native minimap for Palworld
 --
 -- No blueprint, no .pak, no cooked content. The whole mod is this Lua
 -- script driving UMG through UE4SS reflection. Since 2.3 the terrain is a
@@ -1247,6 +1247,6 @@ guard.register("pump loop", function()
     LoopAsync(PUMP_MS, guard.loopBody("pump", pump, anythingDue))
 end)
 
-guard.log("PalMiniMap 2.3.4 loaded - " ..
+guard.log("PalMiniMap 2.3.5 loaded - " ..
     (boundKeys and keys.describe(boundKeys)
      or "F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom"))

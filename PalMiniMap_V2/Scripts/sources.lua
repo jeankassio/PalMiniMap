@@ -460,6 +460,7 @@ end
 local function rawPicked(actor) return actor.bPickedInClient end
 local function rawModel(actor) return actor.MapObjectModel end
 local function rawOpened(model) return model.bOpened end
+local function rawDisposed(model) return model.bDisposed end
 
 -- Notes and effigies: they stay in the world after being taken, with the
 -- flag set on the actor itself.
@@ -467,6 +468,39 @@ local function pickedUp(actor)
     local ok, v = pcall(rawPicked, actor)
     if not ok then return false end
     return asBool(v) == true
+end
+
+-- EGGS AND OTHER MAP-OBJECT PICKUPS (2.3.5).
+--
+-- Reported in game: "coletei um ovo, e ele nao sumiu do minimapa."
+--
+-- `hideCollected` used `pickedUp` for eggs, and `bPickedInClient` lives on
+-- `PalLevelObjectObtainable` - the base of Note and Relic ONLY. Checked in
+-- the usmap: `PalMapObjectPalEgg` has exactly ONE property,
+-- `ParameterComponent`. There is no pickup flag on the actor at all, so the
+-- read raised, the answer was always "not taken", and the egg stayed.
+--
+-- This is the 2.2.19 chest bug in a second hierarchy, and the shape of the
+-- fix is the same: THE STATE IS ON THE MODEL, not the actor. A chest has
+-- its own `PalMapObjectTreasureBoxModel.bOpened`; an egg's model has no
+-- flag of its own, but every map-object model inherits
+-- `PalMapObjectConcreteModelBase.bDisposed`, which is what a consumed
+-- pickup sets.
+--
+-- Unreadable still means NOT taken. Inverting that empties the map, which
+-- is the 2.0.6 mistake this project keeps having to re-learn.
+local function mapObjectGone(actor)
+    local ok, model = pcall(rawModel, actor)
+    if ok and model ~= nil then
+        local got, v = pcall(rawDisposed, model)
+        if got then
+            local b = asBool(v)
+            if b ~= nil and b then return true end
+        end
+    end
+    -- Some pickups really are `PalLevelObjectObtainable`; ask that too
+    -- rather than deciding on one reader.
+    return pickedUp(actor)
 end
 
 -- Chests: looted ones stay in the world too - the lid is just open.
@@ -495,7 +529,7 @@ end
 -- pay no extra reflection.
 local STATIC_KINDS = {
     { cfg = "showChests",     class = "PalMapObjectTreasureBox",                kind = "chest",   collected = chestOpened },
-    { cfg = "showEggs",       class = "PalMapObjectPalEgg",                     kind = "egg",     collected = pickedUp, iconFor = eggIcon },
+    { cfg = "showEggs",       class = "PalMapObjectPalEgg",                     kind = "egg",     collected = mapObjectGone, iconFor = eggIcon },
     { cfg = "showNotes",      class = "PalLevelObjectNote",                     kind = "note",    collected = pickedUp },
     { cfg = "showEffigies",   class = "PalLevelObjectRelic",                    kind = "effigy",  collected = pickedUp },
     { cfg = "showSkillFruit", class = "PalMapObjectSpawnerMultiItem",           kind = "fruit"    },
@@ -1936,7 +1970,8 @@ local rotation = 1
 -- came from exactly that.
 -- ---------------------------------------------------------------
 local RESCAN_DISTANCE = 12000.0     -- world units travelled since the pass
-local RESCAN_COLLECTIBLE = 20.0     -- seconds, kinds whose markers can be taken
+local RESCAN_NEAR = 5.0             -- seconds, standing next to one of them
+local RESCAN_COLLECTIBLE = 60.0     -- seconds, kinds whose markers can be taken
 local RESCAN_SECONDS = 300.0        -- seconds, everything else
 -- How close the player has to be to one of a kind's own markers for the
 -- collectible re-check to be worth doing at all. You cannot open a chest
@@ -1967,16 +2002,22 @@ local function kindIsStale(spec, now, px, py)
         return true                              -- travelled: new chunks
     end
     if spec.collected ~= nil then
-        -- A collectible kind is re-checked often, but ONLY where the player
-        -- could actually have collected something. Skipping fresh kinds made
-        -- the collectibles come round far faster than the old fifteen-kind
-        -- rotation did, so without this the change traded a saving on the
-        -- rest for a cost on these - measured, not assumed: chest walks went
-        -- from 1.1/min to 2.3/min while standing still.
-        if (now - seen.at) < RESCAN_COLLECTIBLE then return false end
-        if nearAnyMarker(spec.kind, px, py) then return true end
-        -- Nothing of this kind within reach: fall through to the slow net,
-        -- so a marker can still never be stale for ever.
+        local age = now - seen.at
+        -- STANDING ON ONE: check quickly. Whoever just picked an egg up is
+        -- still next to where it was, and "coletei um ovo e ele nao sumiu"
+        -- is what a slow re-check feels like from the player's side.
+        if age >= RESCAN_NEAR and nearAnyMarker(spec.kind, px, py) then
+            return true
+        end
+        -- None within reach, so nothing of this kind can have been taken by
+        -- US. Somebody else's pickup on a server is covered by the slower
+        -- net below. Skipping fresh kinds made the collectibles come round
+        -- far faster than the old fifteen-kind rotation did, so without this
+        -- the change traded a saving on the rest for a cost on these -
+        -- measured, not assumed: chest walks went from 1.1/min to 2.3/min
+        -- while standing still.
+        if age >= RESCAN_COLLECTIBLE then return true end
+        return false
     end
     return (now - seen.at) >= RESCAN_SECONDS
 end

@@ -1014,8 +1014,19 @@ function M.update(cfg, player, marks, count)
 
                 if brushTex ~= nil then
                     if entry.tex ~= brushPath then
-                        entry.tex = brushPath
-                        pcall(rawSetBrush, entry.image, brushTex)
+                        -- LATCH ONLY ON SUCCESS. Writing `entry.tex` first
+                        -- and then setting the brush is what produced the
+                        -- white squares around monsters: `show` below is
+                        -- `entry.tex ~= nil`, so a setter that failed left
+                        -- the slot VISIBLE WITH NO BRUSH - which Slate draws
+                        -- as a plain white box - and the equality test then
+                        -- stopped it ever being retried. Same mistake as the
+                        -- terrain quad's generation latch.
+                        if pcall(rawSetBrush, entry.image, brushTex) then
+                            entry.tex = brushPath
+                        else
+                            entry.tex = nil
+                        end
                     end
                 else
                     -- NOTHING resolved. Leaving the brush alone showed
