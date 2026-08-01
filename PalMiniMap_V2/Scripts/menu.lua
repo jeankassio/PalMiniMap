@@ -85,6 +85,9 @@ local LAYOUT = {
     { key = "showViewCone",      label = "Show camera view cone",     kind = "bool" },
     { key = "viewConeOpacity",   label = "View cone opacity",          kind = "pct" },
     { key = "viewConeSize",      label = "View cone radius",           kind = "pct" },
+    { key = "showElevationIndicators", label = "Show elevation arrows", kind = "bool" },
+    { key = "elevationThreshold", label = "Elevation threshold (cm)", kind = "int", min = 100, max = 5000, step = 100 },
+    { key = "elevationIndicatorSize", label = "Elevation arrow size", kind = "int", min = 5, max = 18 },
 
     { header = "Pals" },
     { key = "showPals",          label = "Show pals",                kind = "bool" },
