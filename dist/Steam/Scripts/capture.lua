@@ -288,6 +288,15 @@ local S = {
     capturedAt = 0.0,
 
     route = nil,            -- how the component was created, for the log
+    -- Was it created ATTACHED to the pawn? If so the engine carries it and
+    -- no per-capture placement call is made - see the long note above
+    -- rawSetWorldBoth, and the native crash that call caused.
+    attached = false,
+    trackChecked = false,   -- has the attachment been proven to follow?
+    -- Set only when the attachment demonstrably does NOT follow the pawn on
+    -- this build. Session-wide: it is a property of the build, not of one
+    -- component, so a rebuild must not make us re-learn it.
+    mustPlace = false,
     tries = 0,
     nextTryAt = 0.0,
     unavailable = false,
@@ -330,13 +339,56 @@ local function rawAttach(comp, parent)
 end
 local function rawCaptureScene(comp) comp:CaptureScene() end
 
--- POSITIONING: struct-valued FUNCTION ARGUMENTS are proven on this build
--- (render.lua has passed vector tables to SetPosition since 2.0), struct
--- PROPERTY writes are not. So the camera is placed with a call, and the
--- relative-transform properties below are only belt and braces for the
--- attached case. Two call shapes, because a build that reflects
--- K2_SetWorldLocationAndRotation's out parameter differently still has the
--- two single-axis setters.
+-- =====================================================================
+-- POSITIONING, AND THE NATIVE CRASH IT CAUSED (2.3.4)
+--
+-- The mod died with EXCEPTION_ACCESS_VIOLATION reading 0x00006e9e00000038
+-- after about seventeen minutes in the world. What the log showed, and it
+-- showed it 1419 times:
+--
+--     [push_weakobjectproperty] Operation::Set is not supported
+--
+-- in bursts of THREE, starting four seconds after "live terrain capture
+-- positioned via K2_SetWorldLocationAndRotation" and ending on the very
+-- last line before the crash. The gaps between bursts were 0.5-4.0 s,
+-- which is exactly this file's capture cadence (MIN_INTERVAL up to
+-- IDLE_REFRESH). 1419 / 3 = 473 captures.
+--
+-- THREE, because that is how many WEAK OBJECT pointers an `FHitResult`
+-- carries (its component, its hit actor handle and its physical material).
+-- Every K2_SetWorld* function takes an FHitResult as an out parameter, and
+-- passing a plain Lua table for it makes UE4SS walk the struct and try to
+-- assign each property from that table - which it cannot do for a weak
+-- pointer, so it says so and leaves them however it found them. Doing that
+-- several times a second for seventeen minutes is the only thing this mod
+-- was doing that the engine had no defined answer for.
+--
+-- There is no variant without the out parameter on this build:
+-- `K2_SetWorldLocationAndRotationNoPhysics` is not in the shipping exe at
+-- all (checked), and K2_SetWorldLocation / K2_SetWorldRotation /
+-- K2_SetRelativeLocation all carry the same FHitResult.
+--
+-- SO THE CALL IS GONE ON THE ROUTE THAT MATTERS. The component is created
+-- with `AddComponentByClass` ATTACHED to the pawn's root, which means the
+-- engine already keeps its world transform current every frame - the
+-- placement call was re-doing by hand, several times a second, what the
+-- attachment does for free. Setting the relative transform ONCE (plus
+-- `bAbsoluteRotation`, so the camera keeps pointing down however the pawn
+-- turns) is all the attached route ever needed.
+--
+-- It is not assumed to have worked, because struct PROPERTY writes are not
+-- proven on this build the way struct function ARGUMENTS are: after the
+-- first capture the component's own world location is read back with
+-- `K2_GetComponentLocation` - a plain getter, no out parameter, nothing to
+-- marshal - and compared against where the player actually is. If it is
+-- not tracking, `S.mustPlace` turns the old call back on for the session
+-- and says so in the log. A build that needs it pays the warnings; this
+-- one does not pay anything.
+--
+-- The two call shapes below are kept for the unattached and
+-- StaticConstructObject routes, which have no parent to follow and
+-- genuinely have to be moved by hand.
+-- =====================================================================
 local function rawSetWorldBoth(comp, x, y, z)
     VEC.X, VEC.Y, VEC.Z = x, y, z
     comp:K2_SetWorldLocationAndRotation(VEC, ROT, false, NO_HIT, true)
@@ -369,11 +421,10 @@ local function place(comp, x, y, z)
     return false
 end
 
--- Best effort, and quiet: on the attached route these keep the camera
--- pointing down between the explicit placements above, and on a build
--- where struct property writes do not take, place() is already doing the
--- whole job. Both the member-write and the whole-struct forms are tried
--- because UE4SS builds differ on which one takes.
+-- On the attached route these ARE the placement - see the note above - so
+-- they are no longer "best effort". Both the member-write and the
+-- whole-struct forms are tried because UE4SS builds differ on which one
+-- takes, and `trackingWorks()` below decides whether either did.
 local function rawRelativeMembers(comp, z)
     local rl = comp.RelativeLocation
     rl.X, rl.Y, rl.Z = 0.0, 0.0, z
@@ -386,6 +437,26 @@ local function rawRelativeAssign(comp, z)
     comp.RelativeRotation = ROT
 end
 local function rawAbsoluteRotation(comp) comp.bAbsoluteRotation = true end
+-- A plain getter returning a struct BY VALUE: nothing to marshal into, so
+-- none of the FHitResult problem applies to reading.
+local function rawComponentLocation(comp) return comp:K2_GetComponentLocation() end
+
+-- Is the attachment really carrying the camera with the pawn? Called once,
+-- after the first capture, and never again unless the component is rebuilt.
+-- A generous tolerance on purpose: the question is "is it following the
+-- player at all", not "is it exact" - the capture is overscanned and one
+-- capture interval of lag is normal and harmless.
+local TRACK_TOLERANCE = 3000.0
+
+local function trackingWorks(comp, px, py)
+    local loc = guard.get(rawComponentLocation, comp)
+    if loc == nil then return nil end                 -- unreadable: no opinion
+    local x = guard.get(function() return loc.X end)
+    local y = guard.get(function() return loc.Y end)
+    if type(x) ~= "number" or type(y) ~= "number" then return nil end
+    local dx, dy = x - px, y - py
+    return (dx * dx + dy * dy) <= (TRACK_TOLERANCE * TRACK_TOLERANCE)
+end
 local function rawSetTarget(comp, rt) comp.TextureTarget = rt end
 local function rawSetOrtho(comp, w)
     comp.ProjectionType = PROJECTION_ORTHO
@@ -482,14 +553,14 @@ local function createComponent(owner)
     -- current as the player runs around and we do not have to
     local comp = guard.get(rawAddComponent, owner, class, false)
     if comp ~= nil and guard.alive(comp) then
-        return comp, "AddComponentByClass (attached)"
+        return comp, "AddComponentByClass (attached)", true
     end
 
     -- same call without the attachment: the component is positioned by
     -- hand every capture instead
     comp = guard.get(rawAddComponent, owner, class, true)
     if comp ~= nil and guard.alive(comp) then
-        return comp, "AddComponentByClass (unattached)"
+        return comp, "AddComponentByClass (unattached)", false
     end
 
     comp = guard.get(StaticConstructObject, class, owner)
@@ -498,7 +569,9 @@ local function createComponent(owner)
         if root ~= nil and guard.alive(root) then
             guard.get(rawAttach, comp, root)
         end
-        return comp, "StaticConstructObject (may not be registered)"
+        -- attached by hand above, but only if the root was reachable;
+        -- treat it as unattached so the placement fallback still runs
+        return comp, "StaticConstructObject (may not be registered)", false
     end
 
     return nil, "no route constructed a capture component"
@@ -553,6 +626,11 @@ local function release(destroyComponent)
         guard.get(rawDestroy, S.comp)
     end
     S.comp, S.rt = nil, nil
+    -- `attached` and `trackChecked` belong to the component that is going
+    -- away. `mustPlace` deliberately does NOT reset: it is a fact about
+    -- this BUILD, and re-learning it per rebuild would mean another
+    -- component's worth of captures pointed at the wrong place.
+    S.attached, S.trackChecked = false, false
     S.rtPx, S.styleId, S.height, S.source = nil, nil, nil, nil
     S.cx, S.cy, S.capW, S.capZoom = nil, nil, nil, nil
     -- the component this was written on is going away, so forget it and
@@ -799,12 +877,13 @@ function M.update(cfg, pawn, px, py, pz, zoom, now)
             S.gen = S.gen + 1
         end
         if S.comp == nil then
-            local comp, route = createComponent(pawn)
+            local comp, route, attached = createComponent(pawn)
             if comp == nil then
                 guard.log("live terrain capture: " .. tostring(route))
                 return false
             end
-            S.comp, S.route = comp, route
+            S.comp, S.route, S.attached = comp, route, attached == true
+            S.trackChecked = false
         end
         configure(styleId, style, sourceId, height)
         S.tries = 0
@@ -867,11 +946,14 @@ function M.update(cfg, pawn, px, py, pz, zoom, now)
     -- from the pixels that are really in the target.
     local capW = zoom * OVERSCAN
 
-    -- Place it, THEN capture. On the attached route the engine has already
-    -- put the component roughly here; this makes it exact, and on the
-    -- unattached route it is the only thing that positions the camera at
-    -- all. One reflection call per capture, four times a second.
-    if not place(S.comp, px, py, pz + height) then return false end
+    -- THE PLACEMENT CALL ONLY HAPPENS WHEN SOMETHING HAS TO BE MOVED BY
+    -- HAND. On the attached route the engine has already carried the
+    -- component with the pawn, and calling K2_SetWorldLocationAndRotation
+    -- anyway is what killed the game after seventeen minutes - see the
+    -- note above rawSetWorldBoth. Unattached routes still need it.
+    if S.mustPlace or not S.attached then
+        if not place(S.comp, px, py, pz + height) then return false end
+    end
     if S.orthoW ~= capW then
         guard.get(rawSetOrtho, S.comp, capW)
         S.orthoW = capW
@@ -881,6 +963,24 @@ function M.update(cfg, pawn, px, py, pz, zoom, now)
     local ok = pcall(rawCaptureScene, S.comp)
     local cost = os.clock() - started
     if not ok then return false end
+
+    -- Did the attachment actually carry it? Asked ONCE per component, right
+    -- after its first capture, because a relative-transform property write
+    -- that silently did not take would leave the camera at the pawn's feet
+    -- looking sideways - a picture verify() would happily accept, since it
+    -- only measures colour and alpha.
+    if S.attached and not S.mustPlace and not S.trackChecked then
+        S.trackChecked = true
+        local tracking = trackingWorks(S.comp, px, py)
+        if tracking == false then
+            S.mustPlace = true
+            guard.log("live terrain capture: the attached component is not "
+                .. "following the pawn on this build, so it will be positioned "
+                .. "by hand each capture. Expect [push_weakobjectproperty] "
+                .. "warnings in this log; they come from the engine's hit-result "
+                .. "parameter and are why the call is avoided when possible.")
+        end
+    end
 
     S.cx, S.cy, S.capW, S.capZoom = px, py, capW, zoom
     S.capturedAt = now

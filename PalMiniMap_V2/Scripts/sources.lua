@@ -1700,21 +1700,27 @@ local function scanViaFindAll(cfg, px, py, maxD2, playerPawn)
     local selfName = playerPawn ~= nil and addExcluded(excluded, playerPawn) or nil
     local nPlayers = 0
 
-    if not rejectedClass["PalPlayerCharacter"] then
-        local all = findAll("PalPlayerCharacter", "players")
-        if usableForExclusion("PalPlayerCharacter", #all, palCount) then
-            nPlayers = #all
-            excluded = excluded or {}
-            for i = 1, #all do
-                local a = all[i]
-                notePlayerClass(a)
-                local n = addExcluded(excluded, a)
-                if cfg.showPlayers and n ~= selfName then
-                    addPlayer(cfg, a)
-                end
-            end
-        end
-    end
+    -- THE SECOND OBJECT-ARRAY WALK IS GONE (2.3.6).
+    --
+    -- This tick used to do TWO full `FindAllOf` walks back to back - one for
+    -- PalCharacter, one for PalPlayerCharacter - and a full walk of every
+    -- UObject in the level is the single most expensive thing this mod can
+    -- ask the engine for. That pair, plus a location read per character, is
+    -- the spike a player feels as a micro-freeze every few seconds.
+    --
+    -- The second walk is unnecessary, because PLAYERS ARE ALREADY IN THE
+    -- FIRST LIST: PalPlayerCharacter derives from PalCharacter. It existed
+    -- to build the name-based exclusion set, and since 2.3.3 that job is
+    -- done per actor by `isPlayerActor` reading the CLASS - which is also
+    -- what makes it safe to drop, since the class test never depended on
+    -- this list being complete or even present.
+    --
+    -- So other players are now picked out of the classification loop below,
+    -- where they are already being identified, and `gatherNear` has already
+    -- thrown away everyone too far to draw.
+    --
+    -- The local player is still excluded by name: it has the centred arrow,
+    -- and 2.0.5 stacked a second icon underneath that arrow permanently.
 
     -- There is no FindAllOf("PalNPC") any more. It was a full walk of the
     -- UObject array every scan for a result we had already decided to
@@ -1741,6 +1747,9 @@ local function scanViaFindAll(cfg, px, py, maxD2, playerPawn)
             -- nothing again.
             if not iconFormatWorks and isPlayerActor(e.actor) then
                 nLatePlayers = nLatePlayers + 1
+                if cfg.showPlayers and e.name ~= selfName then
+                    addPlayer(cfg, e.actor)
+                end
             else
                 nPals = nPals + 1
                 if cfg.showPals and inWorld(e.actor) then
@@ -1756,7 +1765,13 @@ local function scanViaFindAll(cfg, px, py, maxD2, playerPawn)
         -- of per-actor reflection that scales with how crowded the area is
         -- - the thing that made walking hitch in 2.1.2.
         elseif isPlayerActor(e.actor) then
+            -- Another player. This is where they are drawn from now: they
+            -- arrived in the PalCharacter list like everything else, and
+            -- gatherNear has already dropped the ones too far to matter.
             nLatePlayers = nLatePlayers + 1
+            if cfg.showPlayers and e.name ~= selfName then
+                addPlayer(cfg, e.actor)
+            end
         else
             nHumans = nHumans + 1
             if cfg.showNPCs then addNPC(cfg, e.actor, e.name) end

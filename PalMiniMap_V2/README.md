@@ -665,6 +665,65 @@ So that a collected marker disappears while you are still standing over it,
 collectible kinds are re-checked after 5 s when one of their markers is within
 reach, and otherwise left for 60 s.
 
+## Hidden was not idle (2.3.6)
+
+A published-build report: micro-freezes on an RTX 4080, **continuing while in
+camp with "hide the map in camp" ticked**, and gone the moment *Show minimap*
+was unchecked.
+
+That last clause is the whole diagnosis. `cfg.enabled` gates the scan and
+movement ticks, but `hide` only ever stopped the **draw** — `movementTick`
+returns early, while `scanTick`, `staticTick` and `assets.pump` sit beside it
+in `pump()` and kept running at full price for a minimap nobody could see.
+
+Measured in the soak harness, weighting a `FindAllOf` at 250 units because it
+is a full walk of every UObject in the level:
+
+| | before | after |
+|---|---|---|
+| two minutes hidden, object-array walks | 90 | **0** |
+| worst hidden pump | 702 | **3** |
+| worst visible pump | 969 | **434** |
+| walks over a two-hour session | 5643 | **3952** |
+
+Two changes got there. `minimapHidden` is set by `movementTick` right after the
+hide decision and read by `pump()`, which then skips the scan, the static step
+and the asset pump; the movement tick itself still runs, because it is what
+notices the screen closed or the player left the camp.
+
+And **the second object-array walk is gone**. The character scan did
+`FindAllOf("PalCharacter")` *and* `FindAllOf("PalPlayerCharacter")` back to
+back — but players are already in the first list, since `PalPlayerCharacter`
+derives from `PalCharacter`. The second walk existed only to build the
+name-based exclusion set, and since 2.3.3 `isPlayerActor` does that per actor
+from the class. Other players are now picked out of the classification loop,
+where they were already being identified and `gatherNear` has already thrown
+away the distant ones.
+
+## The world tree, and why speed changed the background (2.3.6)
+
+Same report: at the world tree everything looked right on foot, but **on a
+mount the background became the painted island**. Nobody touched the zoom key.
+
+`wantsLive` compared `liveZoomMax` against the *effective* zoom — the one
+**autozoom** produces, up to 2.2× the player's own at mount speed. A base zoom
+of 30 000 becomes 66 000, crosses the 60 000 threshold, and the terrain source
+swaps mid-ride. The two sources do not look alike, so it reads as the map
+glitching; at the world tree, where the painted map has no art at all, it reads
+as being somewhere else entirely.
+
+The threshold now uses the zoom the **player asked for** — `cfg.zoom`, or
+`megazoom` while `F1` is held on. That changes only on `+`/`-` and `F1`, so the
+source cannot flap while moving and needs no hysteresis. `liveZoomMax` is about
+how much of the world is *streamed in*, and the answer to that does not change
+because you started running.
+
+**One thing this does not fix, and cannot:** with *Real-time rendering* off,
+the world tree shows Palpados. `LI_WorldTreeVisual_01` is a level **instance
+inside `PL_MainWorld5`**, not a separate world, so its coordinates fall inside
+the painted map's bounds — and `T_WorldMap` simply has no art there. Only the
+live render can draw that place.
+
 ## Hiding behind the game's own screens (2.2.11)
 
 Seven attempts. This is the first one built on **measurement** instead of on

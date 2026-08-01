@@ -1,5 +1,5 @@
 -- =====================================================================
--- PalMiniMap 2.3.5 - a native minimap for Palworld
+-- PalMiniMap 2.3.6 - a native minimap for Palworld
 --
 -- No blueprint, no .pak, no cooked content. The whole mod is this Lua
 -- script driving UMG through UE4SS reflection. Since 2.3 the terrain is a
@@ -567,6 +567,25 @@ local NO_MARKS = {}
 -- seconds instead of one class every four.
 local staticDue = false
 
+-- IS THE MINIMAP CURRENTLY OFF SCREEN? Set by movementTick, read by pump().
+--
+-- THE BUG THIS EXISTS FOR (2.3.6), reported against the published build:
+-- "the freezes continue even in camp, even though 'Hide the map in camp'
+-- is checked... the mod continues scanning and creating a load even when
+-- the map isn't displayed."
+--
+-- That was exactly right. `hide` only ever stopped the DRAW - movementTick
+-- returns early - while the character scan, the static scan and the asset
+-- pump all sit in pump() beside it and kept running at full price.
+-- Measured in the soak harness: two minutes hidden still cost 90 full
+-- object-array walks, and the worst hidden pump was 72% of the worst
+-- visible one. For a minimap nobody can see.
+--
+-- Hidden now means idle. What still runs is only what is needed to notice
+-- that it should come BACK: reading the player, the base-camp check and
+-- the game's screen stack, none of which walk the object array.
+local minimapHidden = false
+
 local function movementTick()
     if not render.isBuilt() then return end
     local p = frameState
@@ -598,6 +617,7 @@ local function movementTick()
     if hide == render.isVisible() then
         render.setVisible(not hide)
     end
+    minimapHidden = hide and true or false
     if hide then return end
 
     local zoom = render.effectiveZoom(cfg, p.speed)
@@ -1135,7 +1155,13 @@ local function pump()
     local now = os.clock() * 1000.0
     local wantMaint = (now - lastMaint) >= MAINT_MS
     local wantMenu  = menu.isOpen() and (now - lastMenu) >= MENU_MS
-    local wantScan  = cfg.enabled and (now - lastScan) >= (cfg.scanIntervalMs or 4000)
+    -- `enabled` is the player's switch; `minimapHidden` is the mod's own,
+    -- and both mean the same thing to everything below: there is nothing on
+    -- screen, so there is nothing worth scanning for. The movement tick
+    -- itself still runs while hidden - it is what notices the screen closed
+    -- or the player left the camp - but it returns before any of the work.
+    local awake     = cfg.enabled and not minimapHidden
+    local wantScan  = awake and (now - lastScan) >= (cfg.scanIntervalMs or 4000)
     local wantMove  = cfg.enabled and (now - lastMove) >= (cfg.moveIntervalMs or 100)
 
     -- read the player ONCE per tick and share it; every sub-tick below
@@ -1164,6 +1190,10 @@ local function pump()
     if wantMove then
         lastMove = now
         guard.try("movementTick", movementTick)
+        -- ...and everything after it is skipped while hidden. movementTick
+        -- has just re-evaluated `minimapHidden`, so this reads the decision
+        -- made microseconds ago rather than one tick stale.
+        if not minimapHidden then
         -- Both of the following are AFTER the draw and both are bounded.
         -- Between them they are the only reflection-heavy work left off the
         -- scan tick, and neither may grow with how much is around the
@@ -1175,6 +1205,7 @@ local function pump()
         -- real work is already done, and its own throttle (assets.lua)
         -- decides whether it may spend anything at all this time round.
         guard.try("assetPump", assets.pump)
+        end
     end
 
     -- the state buffer is reused, so the pawn reference in it has to be
@@ -1247,6 +1278,6 @@ guard.register("pump loop", function()
     LoopAsync(PUMP_MS, guard.loopBody("pump", pump, anythingDue))
 end)
 
-guard.log("PalMiniMap 2.3.5 loaded - " ..
+guard.log("PalMiniMap 2.3.6 loaded - " ..
     (boundKeys and keys.describe(boundKeys)
      or "F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom"))

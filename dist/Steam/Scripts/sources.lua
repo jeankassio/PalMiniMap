@@ -460,6 +460,7 @@ end
 local function rawPicked(actor) return actor.bPickedInClient end
 local function rawModel(actor) return actor.MapObjectModel end
 local function rawOpened(model) return model.bOpened end
+local function rawDisposed(model) return model.bDisposed end
 
 -- Notes and effigies: they stay in the world after being taken, with the
 -- flag set on the actor itself.
@@ -467,6 +468,39 @@ local function pickedUp(actor)
     local ok, v = pcall(rawPicked, actor)
     if not ok then return false end
     return asBool(v) == true
+end
+
+-- EGGS AND OTHER MAP-OBJECT PICKUPS (2.3.5).
+--
+-- Reported in game: "coletei um ovo, e ele nao sumiu do minimapa."
+--
+-- `hideCollected` used `pickedUp` for eggs, and `bPickedInClient` lives on
+-- `PalLevelObjectObtainable` - the base of Note and Relic ONLY. Checked in
+-- the usmap: `PalMapObjectPalEgg` has exactly ONE property,
+-- `ParameterComponent`. There is no pickup flag on the actor at all, so the
+-- read raised, the answer was always "not taken", and the egg stayed.
+--
+-- This is the 2.2.19 chest bug in a second hierarchy, and the shape of the
+-- fix is the same: THE STATE IS ON THE MODEL, not the actor. A chest has
+-- its own `PalMapObjectTreasureBoxModel.bOpened`; an egg's model has no
+-- flag of its own, but every map-object model inherits
+-- `PalMapObjectConcreteModelBase.bDisposed`, which is what a consumed
+-- pickup sets.
+--
+-- Unreadable still means NOT taken. Inverting that empties the map, which
+-- is the 2.0.6 mistake this project keeps having to re-learn.
+local function mapObjectGone(actor)
+    local ok, model = pcall(rawModel, actor)
+    if ok and model ~= nil then
+        local got, v = pcall(rawDisposed, model)
+        if got then
+            local b = asBool(v)
+            if b ~= nil and b then return true end
+        end
+    end
+    -- Some pickups really are `PalLevelObjectObtainable`; ask that too
+    -- rather than deciding on one reader.
+    return pickedUp(actor)
 end
 
 -- Chests: looted ones stay in the world too - the lid is just open.
@@ -495,7 +529,7 @@ end
 -- pay no extra reflection.
 local STATIC_KINDS = {
     { cfg = "showChests",     class = "PalMapObjectTreasureBox",                kind = "chest",   collected = chestOpened },
-    { cfg = "showEggs",       class = "PalMapObjectPalEgg",                     kind = "egg",     collected = pickedUp, iconFor = eggIcon },
+    { cfg = "showEggs",       class = "PalMapObjectPalEgg",                     kind = "egg",     collected = mapObjectGone, iconFor = eggIcon },
     { cfg = "showNotes",      class = "PalLevelObjectNote",                     kind = "note",    collected = pickedUp },
     { cfg = "showEffigies",   class = "PalLevelObjectRelic",                    kind = "effigy",  collected = pickedUp },
     { cfg = "showSkillFruit", class = "PalMapObjectSpawnerMultiItem",           kind = "fruit"    },
@@ -1666,21 +1700,27 @@ local function scanViaFindAll(cfg, px, py, maxD2, playerPawn)
     local selfName = playerPawn ~= nil and addExcluded(excluded, playerPawn) or nil
     local nPlayers = 0
 
-    if not rejectedClass["PalPlayerCharacter"] then
-        local all = findAll("PalPlayerCharacter", "players")
-        if usableForExclusion("PalPlayerCharacter", #all, palCount) then
-            nPlayers = #all
-            excluded = excluded or {}
-            for i = 1, #all do
-                local a = all[i]
-                notePlayerClass(a)
-                local n = addExcluded(excluded, a)
-                if cfg.showPlayers and n ~= selfName then
-                    addPlayer(cfg, a)
-                end
-            end
-        end
-    end
+    -- THE SECOND OBJECT-ARRAY WALK IS GONE (2.3.6).
+    --
+    -- This tick used to do TWO full `FindAllOf` walks back to back - one for
+    -- PalCharacter, one for PalPlayerCharacter - and a full walk of every
+    -- UObject in the level is the single most expensive thing this mod can
+    -- ask the engine for. That pair, plus a location read per character, is
+    -- the spike a player feels as a micro-freeze every few seconds.
+    --
+    -- The second walk is unnecessary, because PLAYERS ARE ALREADY IN THE
+    -- FIRST LIST: PalPlayerCharacter derives from PalCharacter. It existed
+    -- to build the name-based exclusion set, and since 2.3.3 that job is
+    -- done per actor by `isPlayerActor` reading the CLASS - which is also
+    -- what makes it safe to drop, since the class test never depended on
+    -- this list being complete or even present.
+    --
+    -- So other players are now picked out of the classification loop below,
+    -- where they are already being identified, and `gatherNear` has already
+    -- thrown away everyone too far to draw.
+    --
+    -- The local player is still excluded by name: it has the centred arrow,
+    -- and 2.0.5 stacked a second icon underneath that arrow permanently.
 
     -- There is no FindAllOf("PalNPC") any more. It was a full walk of the
     -- UObject array every scan for a result we had already decided to
@@ -1707,6 +1747,9 @@ local function scanViaFindAll(cfg, px, py, maxD2, playerPawn)
             -- nothing again.
             if not iconFormatWorks and isPlayerActor(e.actor) then
                 nLatePlayers = nLatePlayers + 1
+                if cfg.showPlayers and e.name ~= selfName then
+                    addPlayer(cfg, e.actor)
+                end
             else
                 nPals = nPals + 1
                 if cfg.showPals and inWorld(e.actor) then
@@ -1722,7 +1765,13 @@ local function scanViaFindAll(cfg, px, py, maxD2, playerPawn)
         -- of per-actor reflection that scales with how crowded the area is
         -- - the thing that made walking hitch in 2.1.2.
         elseif isPlayerActor(e.actor) then
+            -- Another player. This is where they are drawn from now: they
+            -- arrived in the PalCharacter list like everything else, and
+            -- gatherNear has already dropped the ones too far to matter.
             nLatePlayers = nLatePlayers + 1
+            if cfg.showPlayers and e.name ~= selfName then
+                addPlayer(cfg, e.actor)
+            end
         else
             nHumans = nHumans + 1
             if cfg.showNPCs then addNPC(cfg, e.actor, e.name) end
@@ -1901,8 +1950,92 @@ end
 -- been picked up since - and those go away on that kind's next turn.
 -- ---------------------------------------------------------------
 local kindCache = {}      -- kind -> { x, y, ... }  positions only
-local kindSeen = {}       -- kind -> true once scanned at least once
+-- kind -> { at = os.clock(), x = , y = } of the pass that filled it, or nil
+-- if the kind has never been walked in this world.
+local kindSeen = {}
 local rotation = 1
+
+-- ---------------------------------------------------------------
+-- SCAN ONCE, THEN ONLY WHEN SOMETHING COULD HAVE CHANGED (2.3.4)
+--
+-- Until now the rotation above never stopped: every static kind was walked
+-- again, `FindAllOf` and all, every few seconds for the whole session -
+-- fifteen full UObject-array walks per round, for lists that had not moved
+-- since the last round. Chests do not walk away.
+--
+-- Two things genuinely change, and they want different answers:
+--
+--   WHERE things are   changes only when the level streams in something
+--                      new, which happens because the player TRAVELLED.
+--                      So the trigger is distance, not time.
+--   WHETHER a thing is
+--   still there        changes when the player opens a chest or picks up
+--                      a note, and `collected` is read at scan time, so
+--                      only a re-walk clears it. That is the ONE reason a
+--                      standing-still player still needs re-scans - and
+--                      only for the four kinds that can be collected.
+--
+-- Hence a short interval for collectible kinds, a long safety net for the
+-- rest, and a distance trigger for both. Standing in a base, this takes
+-- the static scan from ~15 array walks a minute to zero.
+--
+-- The alternative - caching the actor and re-reading `collected` off it -
+-- would be cheaper still and is deliberately NOT done: it means holding
+-- actor references indefinitely, and every native crash this mod has had
+-- came from exactly that.
+-- ---------------------------------------------------------------
+local RESCAN_DISTANCE = 12000.0     -- world units travelled since the pass
+local RESCAN_NEAR = 5.0             -- seconds, standing next to one of them
+local RESCAN_COLLECTIBLE = 60.0     -- seconds, kinds whose markers can be taken
+local RESCAN_SECONDS = 300.0        -- seconds, everything else
+-- How close the player has to be to one of a kind's own markers for the
+-- collectible re-check to be worth doing at all. You cannot open a chest
+-- from across the island, so if none is within reach nothing of that kind
+-- can have changed and the walk is pure waste. Generous, because the
+-- cached position is where the marker was, not where the player's reach
+-- ends, and being late to clear a marker is worse than one extra walk.
+local INTERACT_RANGE = 6000.0
+
+-- Is the player near enough to any marker of this kind to have taken one?
+local function nearAnyMarker(kind, px, py)
+    local list = kindCache[kind]
+    if list == nil then return false end
+    local r2 = INTERACT_RANGE * INTERACT_RANGE
+    for i = 1, #list do
+        local p = list[i]
+        local dx, dy = px - p.x, py - p.y
+        if (dx * dx + dy * dy) <= r2 then return true end
+    end
+    return false
+end
+
+local function kindIsStale(spec, now, px, py)
+    local seen = kindSeen[spec.kind]
+    if seen == nil then return true end          -- never walked
+    local dx, dy = px - seen.x, py - seen.y
+    if (dx * dx + dy * dy) > (RESCAN_DISTANCE * RESCAN_DISTANCE) then
+        return true                              -- travelled: new chunks
+    end
+    if spec.collected ~= nil then
+        local age = now - seen.at
+        -- STANDING ON ONE: check quickly. Whoever just picked an egg up is
+        -- still next to where it was, and "coletei um ovo e ele nao sumiu"
+        -- is what a slow re-check feels like from the player's side.
+        if age >= RESCAN_NEAR and nearAnyMarker(spec.kind, px, py) then
+            return true
+        end
+        -- None within reach, so nothing of this kind can have been taken by
+        -- US. Somebody else's pickup on a server is covered by the slower
+        -- net below. Skipping fresh kinds made the collectibles come round
+        -- far faster than the old fifteen-kind rotation did, so without this
+        -- the change traded a saving on the rest for a cost on these -
+        -- measured, not assumed: chest walks went from 1.1/min to 2.3/min
+        -- while standing still.
+        if age >= RESCAN_COLLECTIBLE then return true end
+        return false
+    end
+    return (now - seen.at) >= RESCAN_SECONDS
+end
 
 local ACTORS_PER_STEP = 48
 
@@ -1930,12 +2063,15 @@ local function wantedKind(cfg, spec)
     return false
 end
 
-local function beginKind(spec)
+local function beginKind(spec, px, py)
     local all = findAll(spec.class, spec.kind)
     cursor = {
         spec = spec, all = all, total = #all, index = 0,
         list = {}, count = 0,       -- built aside, swapped in when complete
         startedAt = os.clock(),
+        -- where the player was when this pass began, stamped onto
+        -- kindSeen when it completes
+        px = px, py = py,
     }
 end
 
@@ -1990,7 +2126,9 @@ local function stepKind(cfg)
 
     for j = #list, count + 1, -1 do list[j] = nil end
     kindCache[spec.kind] = list
-    kindSeen[spec.kind] = true
+    -- Remember WHEN and WHERE this pass ran, not just that it did:
+    -- kindIsStale() needs both to decide the kind is worth walking again.
+    kindSeen[spec.kind] = { at = os.clock(), x = c.px, y = c.py }
     cursor = nil
     return true
 end
@@ -2056,7 +2194,7 @@ end
 --
 -- `due` is the scan tick's signal that a full round is wanted (it fires at
 -- scanIntervalMs). Between rounds this returns immediately.
-function M.stepStatic(cfg, due)
+function M.stepStatic(cfg, due, px, py)
     if cursor ~= nil then
         if stepKind(cfg) then
             S.staticDirty = true
@@ -2071,13 +2209,24 @@ function M.stepStatic(cfg, due)
     -- them can be retired in one go.
     local changed = false
     local checked = 0
+    local now = os.clock()
+    -- Without a player position there is nothing to measure travel against,
+    -- so fall back to the kind's own position, which makes the first pass
+    -- happen and later ones wait for the timer.
+    px = tonumber(px) or 0.0
+    py = tonumber(py) or 0.0
     while checked < #STATIC_KINDS do
         local spec = STATIC_KINDS[rotation]
         rotation = (rotation % #STATIC_KINDS) + 1
         checked = checked + 1
         if wantedKind(cfg, spec) then
-            beginKind(spec)
-            break
+            -- THE WHOLE POINT: a kind that was walked recently and near
+            -- here is skipped entirely, so a standing player costs no
+            -- object-array walks at all.
+            if kindIsStale(spec, now, px, py) then
+                beginKind(spec, px, py)
+                break
+            end
         elseif kindCache[spec.kind] ~= nil then
             kindCache[spec.kind] = nil     -- turned off: drop its markers
             kindSeen[spec.kind] = nil
@@ -2097,7 +2246,7 @@ end
 -- the minimap populates quickly instead of one class every four seconds.
 function M.staticFilling(cfg)
     for _, spec in ipairs(STATIC_KINDS) do
-        if wantedKind(cfg, spec) and not kindSeen[spec.kind] then return true end
+        if wantedKind(cfg, spec) and kindSeen[spec.kind] == nil then return true end
     end
     return false
 end

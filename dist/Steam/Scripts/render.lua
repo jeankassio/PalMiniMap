@@ -53,6 +53,7 @@ local FRAME_TEXTURE = "/PalMiniMap/T_minimap_frame.T_minimap_frame"
 local RIM   = 0.038     -- opaque bezel width, fraction of the diameter
 local INSET = 0.018     -- how much smaller the strip disc is than the widget
 local PLAYER_TEXTURE = "/Game/Pal/Texture/UI/InGame/T_icon_map_player.T_icon_map_player"
+local VIEW_CONE_TEXTURE = "/PalMiniMap/T_view_cone.T_view_cone"
 -- Duplicated from sources.lua on purpose: this is the marker EVERY icon
 -- falls back to while its own portrait is still queued, so build() loads
 -- it up front rather than letting the draw loop discover it is missing.
@@ -72,6 +73,9 @@ local S = {
     -- be asked with a counter that only ever changes when the answer is no.
     terrainGen = nil,
     bands = nil,            -- circular mode: list of clipped strips
+    viewCone = nil, viewConeSlot = nil,
+    viewConeSize = nil, viewConeAngle = nil,
+    viewConeOpacity = nil, viewConeShown = nil, viewConeReady = false,
     playerIcon = nil, playerSlot = nil,
     playerSize = nil, playerAngle = nil,
     pool = {},              -- { image=, slot=, inUse=, tex=, tint=, angle=, size= }
@@ -166,12 +170,37 @@ end
 -- a picture of the wrong place. That case (regionContaining == nil) is
 -- every dungeon and the far edges of the world.
 -- ---------------------------------------------------------------
-local function wantsLive(cfg, x, y, zoom)
+-- THE THRESHOLD IS JUDGED ON THE ZOOM THE PLAYER CHOSE, NOT THE ONE
+-- AUTOZOOM PRODUCED (2.3.6).
+--
+-- Reported against the published build: at the world tree, riding a mount,
+-- "when zooming out more than once, the background changes to the standard
+-- world map" - and on foot it was fine. Nobody touched the zoom key; that
+-- is AUTOZOOM, which multiplies the zoom by up to 2.2x with speed. Once
+-- the product crossed `liveZoomMax` the terrain silently swapped to the
+-- painted map, which at the world tree is a picture of somewhere else.
+--
+-- Swapping the whole terrain source because the player got on a mount is
+-- wrong anywhere - the two sources do not look alike, so it reads as the
+-- map glitching - and it is only visible at all because autozoom is a
+-- reaction to movement rather than an intent. `liveZoomMax` is about how
+-- much of the world is STREAMED IN, and the answer to that does not change
+-- because you started running.
+--
+-- So the test uses the zoom the player actually asked for. It changes only
+-- on +/- and on megazoom (F1), so the source cannot flap while moving and
+-- needs no hysteresis.
+local function chosenZoom(cfg)
+    if cfg.megazoomActive then return tonumber(cfg.megazoom) or 260000 end
+    return tonumber(cfg.zoom) or 22000
+end
+
+local function wantsLive(cfg, x, y)
     if not cfg.liveTerrain then return false end
     if liveBrushBroken then return false end
     if not capture.available() then return false end
     if worldmap.regionContaining(x, y) == nil then return true end
-    return zoom <= (tonumber(cfg.liveZoomMax) or 60000)
+    return chosenZoom(cfg) <= (tonumber(cfg.liveZoomMax) or 60000)
 end
 
 -- Re-apply the quality setting. Called when the menu changes it, never
@@ -368,6 +397,9 @@ function M.destroy()
     S.bands = nil
     S.rim, S.rimSlot, S.rimSize = nil, nil, nil
     S.editBorder, S.editSlot = nil, nil
+    S.viewCone, S.viewConeSlot = nil, nil
+    S.viewConeSize, S.viewConeAngle = nil, nil
+    S.viewConeOpacity, S.viewConeShown, S.viewConeReady = nil, nil, false
     S.playerIcon, S.playerSlot = nil, nil
     S.playerSize, S.playerAngle = nil, nil
     S.pool = {}
@@ -376,6 +408,7 @@ function M.destroy()
 end
 
 local BACKDROP = { R = 0.02, G = 0.03, B = 0.05, A = 0.55 }
+local VIEW_CONE_TINT = { R = 0.28, G = 0.82, B = 1.0, A = 0.22 }
 
 -- ---------------------------------------------------------------
 -- The circular shape
@@ -598,6 +631,25 @@ function M.build(pc, cfg)
         end
     end
 
+    -- Camera-facing view cone, drawn over the terrain but under every
+    -- point-of-interest icon and under the centred player arrow. The image
+    -- points upward in its authored orientation; update() gives it exactly
+    -- the same angle as the player marker.
+    S.viewCone = construct("/Script/UMG.Image", S.tree)
+    if S.viewCone ~= nil then
+        S.viewConeSlot = addToCanvas(S.viewport, S.viewCone)
+        guard.get(function() S.viewConeSlot:SetZOrder(8) end)
+        local coneTex = assets.loadNow(VIEW_CONE_TEXTURE, false)
+        if coneTex ~= nil then
+            S.viewConeReady = true
+            guard.get(function() S.viewCone:SetBrushFromTexture(coneTex, false) end)
+            setVisible(S.viewCone, false) -- first update applies the setting
+        else
+            setVisible(S.viewCone, false)
+            guard.log("icons/T_view_cone.png is missing; the camera view cone is disabled")
+        end
+    end
+
     -- icon pool: allocated once, reused forever. No allocation, no
     -- destruction and no GC churn while playing.
     local capacity = poolCapacity(cfg)
@@ -703,7 +755,9 @@ function M.isVisible() return S.visible end
 -- ---------------------------------------------------------------
 -- Per-update drawing
 --
--- `player` = { x, y, yaw, speed }; `marks` is sources.collect()'s pooled
+-- `player` = { x, y, yaw, bodyYaw, speed }; `yaw` is camera/control
+-- direction while `bodyYaw` is the character actor's facing direction.
+-- `marks` is sources.collect()'s pooled
 -- array and `count` says how much of it is live. Callers pass plain
 -- numbers - never UObjects - so nothing here can touch a dying actor.
 -- ---------------------------------------------------------------
@@ -811,7 +865,7 @@ function M.update(cfg, player, marks, count)
     --          picture stays put in the world.
     --   map  : centre = the middle of the region, span = the whole region.
     -- ---------------------------------------------------------------
-    local live = wantsLive(cfg, player.x, player.y, zoom)
+    local live = wantsLive(cfg, player.x, player.y)
     local tex, gen, cx, cy, spanWorld
     if live then
         tex = capture.texture()
@@ -845,8 +899,48 @@ function M.update(cfg, player, marks, count)
                 imagePx, pu, pv, rotate, player.yaw)
     if not live then reportTextureSize(tex, cfg, imagePx, size) end
 
-    -- player marker: always centred, rotated to show facing when the map
-    -- itself is not rotating
+    -- View cone follows CAMERA direction. When the map rotates with the
+    -- camera it stays pointing up; in north-up mode it rotates to camera
+    -- yaw. The player arrow below deliberately uses BODY direction instead.
+    -- cone PNG is square and centred, so scaling it keeps the cone
+    -- origin exactly at the player position.
+    if S.viewCone ~= nil and S.viewConeSlot ~= nil then
+        local showCone = cfg.showViewCone == true and S.viewConeReady == true
+        if showCone then
+            local scale = tonumber(cfg.viewConeSize) or 0.92
+            if scale < 0.20 then scale = 0.20 end
+            if scale > 1.20 then scale = 1.20 end
+            local cs = size * scale
+            setPos(S.viewConeSlot, half - cs * 0.5, half - cs * 0.5)
+            if S.viewConeSize ~= cs then
+                S.viewConeSize = cs
+                setSize(S.viewConeSlot, cs, cs)
+            end
+
+            local ca = rotate and 0.0 or (player.yaw or 0.0)
+            if S.viewConeAngle ~= ca then
+                S.viewConeAngle = ca
+                pcall(rawSetAngle, S.viewCone, ca)
+            end
+
+            local alpha = tonumber(cfg.viewConeOpacity) or 0.22
+            if alpha < 0.0 then alpha = 0.0 end
+            if alpha > 1.0 then alpha = 1.0 end
+            if S.viewConeOpacity ~= alpha then
+                S.viewConeOpacity = alpha
+                VIEW_CONE_TINT.A = alpha
+                pcall(rawSetTint, S.viewCone, VIEW_CONE_TINT)
+            end
+        end
+        if S.viewConeShown ~= showCone then
+            S.viewConeShown = showCone
+            setVisible(S.viewCone, showCone)
+        end
+    end
+
+    -- Player marker follows the CHARACTER BODY, independently of the
+    -- camera/view cone. In camera-up mode subtract camera yaw because the
+    -- terrain has already been rotated by -camera yaw.
     if S.playerSlot ~= nil then
         local ps = cfg.playerIconSize
         setPos(S.playerSlot, half - ps * 0.5, half - ps * 0.5)
@@ -854,7 +948,13 @@ function M.update(cfg, player, marks, count)
             S.playerSize = ps
             setSize(S.playerSlot, ps, ps)
         end
-        local pa = rotate and 0.0 or (player.yaw or 0.0)
+        local bodyYaw = type(player.bodyYaw) == "number"
+            and player.bodyYaw or (player.yaw or 0.0)
+        local pa = bodyYaw
+        if rotate then pa = bodyYaw - (player.yaw or 0.0) end
+        -- Keep the value bounded so crossing 0/360 does not accumulate large
+        -- angles in the widget transform. The visual direction is unchanged.
+        pa = ((pa + 180.0) % 360.0) - 180.0
         if S.playerAngle ~= pa then
             S.playerAngle = pa
             pcall(rawSetAngle, S.playerIcon, pa)
@@ -939,8 +1039,19 @@ function M.update(cfg, player, marks, count)
 
                 if brushTex ~= nil then
                     if entry.tex ~= brushPath then
-                        entry.tex = brushPath
-                        pcall(rawSetBrush, entry.image, brushTex)
+                        -- LATCH ONLY ON SUCCESS. Writing `entry.tex` first
+                        -- and then setting the brush is what produced the
+                        -- white squares around monsters: `show` below is
+                        -- `entry.tex ~= nil`, so a setter that failed left
+                        -- the slot VISIBLE WITH NO BRUSH - which Slate draws
+                        -- as a plain white box - and the equality test then
+                        -- stopped it ever being retried. Same mistake as the
+                        -- terrain quad's generation latch.
+                        if pcall(rawSetBrush, entry.image, brushTex) then
+                            entry.tex = brushPath
+                        else
+                            entry.tex = nil
+                        end
                     end
                 else
                     -- NOTHING resolved. Leaving the brush alone showed

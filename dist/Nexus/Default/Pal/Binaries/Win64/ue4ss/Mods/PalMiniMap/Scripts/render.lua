@@ -170,12 +170,37 @@ end
 -- a picture of the wrong place. That case (regionContaining == nil) is
 -- every dungeon and the far edges of the world.
 -- ---------------------------------------------------------------
-local function wantsLive(cfg, x, y, zoom)
+-- THE THRESHOLD IS JUDGED ON THE ZOOM THE PLAYER CHOSE, NOT THE ONE
+-- AUTOZOOM PRODUCED (2.3.6).
+--
+-- Reported against the published build: at the world tree, riding a mount,
+-- "when zooming out more than once, the background changes to the standard
+-- world map" - and on foot it was fine. Nobody touched the zoom key; that
+-- is AUTOZOOM, which multiplies the zoom by up to 2.2x with speed. Once
+-- the product crossed `liveZoomMax` the terrain silently swapped to the
+-- painted map, which at the world tree is a picture of somewhere else.
+--
+-- Swapping the whole terrain source because the player got on a mount is
+-- wrong anywhere - the two sources do not look alike, so it reads as the
+-- map glitching - and it is only visible at all because autozoom is a
+-- reaction to movement rather than an intent. `liveZoomMax` is about how
+-- much of the world is STREAMED IN, and the answer to that does not change
+-- because you started running.
+--
+-- So the test uses the zoom the player actually asked for. It changes only
+-- on +/- and on megazoom (F1), so the source cannot flap while moving and
+-- needs no hysteresis.
+local function chosenZoom(cfg)
+    if cfg.megazoomActive then return tonumber(cfg.megazoom) or 260000 end
+    return tonumber(cfg.zoom) or 22000
+end
+
+local function wantsLive(cfg, x, y)
     if not cfg.liveTerrain then return false end
     if liveBrushBroken then return false end
     if not capture.available() then return false end
     if worldmap.regionContaining(x, y) == nil then return true end
-    return zoom <= (tonumber(cfg.liveZoomMax) or 60000)
+    return chosenZoom(cfg) <= (tonumber(cfg.liveZoomMax) or 60000)
 end
 
 -- Re-apply the quality setting. Called when the menu changes it, never
@@ -840,7 +865,7 @@ function M.update(cfg, player, marks, count)
     --          picture stays put in the world.
     --   map  : centre = the middle of the region, span = the whole region.
     -- ---------------------------------------------------------------
-    local live = wantsLive(cfg, player.x, player.y, zoom)
+    local live = wantsLive(cfg, player.x, player.y)
     local tex, gen, cx, cy, spanWorld
     if live then
         tex = capture.texture()
