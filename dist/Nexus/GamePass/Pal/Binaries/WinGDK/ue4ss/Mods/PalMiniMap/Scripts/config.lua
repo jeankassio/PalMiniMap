@@ -162,6 +162,13 @@ local DEFAULTS = {
     iconSize           = 18,
     playerIconSize     = 22,
 
+    -- Camera-facing sector centred on the player.
+    -- Size is a fraction of the minimap diameter; 0.92 reaches 92% of the
+    -- minimap radius because the cone starts at the image centre.
+    showViewCone       = true,
+    viewConeOpacity    = 0.22,
+    viewConeSize       = 0.92,
+
     -- refresh rates in milliseconds
     moveIntervalMs     = 100,     -- reposition icons / recentre the map
     scanIntervalMs     = 4000,    -- look for new actors

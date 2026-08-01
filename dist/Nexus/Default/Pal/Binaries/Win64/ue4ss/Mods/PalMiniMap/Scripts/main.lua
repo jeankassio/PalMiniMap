@@ -1,5 +1,5 @@
 -- =====================================================================
--- PalMiniMap 2.3.3 - a native minimap for Palworld
+-- PalMiniMap 2.3.5 - a native minimap for Palworld
 --
 -- No blueprint, no .pak, no cooked content. The whole mod is this Lua
 -- script driving UMG through UE4SS reflection. Since 2.3 the terrain is a
@@ -131,9 +131,10 @@ local sources  = needModule("sources")
 local menu     = needModule("menu")
 local gameui   = needModule("gameui")
 local uiprobe  = needModule("uiprobe")
+local keys     = needModule("keys")
 if config == nil or worldmap == nil or assets == nil or capture == nil
    or render == nil or sources == nil or menu == nil or gameui == nil
-   or uiprobe == nil then
+   or uiprobe == nil or keys == nil then
     guard.log("PalMiniMap is disabled for this session (missing module above).")
     do return end
 end
@@ -146,6 +147,10 @@ if SCRIPT_DIR ~= nil then
 end
 
 config.setPath((SCRIPT_DIR or ".") .. "/../minimap_settings.json")
+-- config.ini lives beside the settings file, i.e. in the mod folder
+-- rather than inside Scripts/, so a player never has to open the
+-- script directory to rebind a key.
+local KEYS_PATH = (SCRIPT_DIR or ".") .. "/../config.ini"
 -- Where the settings landed while scriptDirectory() was returning nil: the
 -- game's working directory, i.e. Pal/Binaries. Read from there once so a
 -- player's existing layout, zoom and toggles survive the fix; the next save
@@ -280,10 +285,10 @@ local function playerPawn()
     return nil
 end
 
--- x, y, yaw, speed of the local player, or nil while the world is not
+-- x, y, camera yaw, body yaw and speed of the local player, or nil while the world is not 
 -- playable. Computed at most once per pump tick and shared by every
 -- sub-tick that needs it.
-local frameStateBuf = { x = 0, y = 0, z = 0, yaw = 0, speed = 0, pawn = nil }
+local frameStateBuf = { x = 0, y = 0, z = 0, yaw = 0, bodyYaw = 0, speed = 0, pawn = nil }
 
 local function readPlayerState()
     local pawn = playerPawn()
@@ -292,11 +297,17 @@ local function readPlayerState()
     -- fixed height above the player; nothing else in the mod uses it.
     local x, y, z = sources.actorLocation3(pawn)
     if x == nil then return nil end
+    -- Camera/control yaw drives the terrain rotation and view cone. Actor
+    -- yaw is kept separately so the small player arrow shows the character's
+    -- body direction, as in Genshin Impact and Wuthering Waves.
     local yaw = 0.0
     local pc = playerController()
     local y2 = pc and guard.get(rawControlRotation, pc) or nil
     if type(y2) ~= "number" then y2 = guard.get(rawActorYaw, pawn) end
     if type(y2) == "number" then yaw = y2 end
+
+    local bodyYaw = guard.get(rawActorYaw, pawn)
+    if type(bodyYaw) ~= "number" then bodyYaw = yaw end
     -- speed drives autozoom; velocity is centimetres per second.
     -- pcall directly, not guard.get: guard.get returns only the FIRST
     -- result and this needs three.
@@ -308,7 +319,9 @@ local function readPlayerState()
     -- reused: this table is rebuilt ten times a second and never escapes
     -- the tick that made it
     local st = frameStateBuf
-    st.x, st.y, st.z, st.yaw, st.speed, st.pawn = x, y, z, yaw, speed, pawn
+    st.x, st.y, st.z = x, y, z
+    st.yaw, st.bodyYaw = yaw, bodyYaw
+    st.speed, st.pawn = speed, pawn
     return st
 end
 
@@ -620,7 +633,8 @@ local function movementTick()
     if not dirty and not captured
        and sourceVersion == lastDrawSourceVersion
        and p.x == lastDrawX and p.y == lastDrawY
-       and p.yaw == lastDrawYaw and p.speed == lastDrawSpeed
+       and p.yaw == lastDrawYaw and p.bodyYaw == lastDrawBodyYaw
+       and p.speed == lastDrawSpeed
        and zoom == lastDrawZoom then
         return
     end
@@ -634,7 +648,9 @@ local function movementTick()
     if settled() then marks, count = sources.collect(cfg, p.x, p.y, zoom) end
     render.update(cfg, p, marks, count)
 
-    lastDrawX, lastDrawY, lastDrawYaw, lastDrawSpeed, lastDrawZoom = p.x, p.y, p.yaw, p.speed, zoom
+    lastDrawX, lastDrawY = p.x, p.y
+    lastDrawYaw, lastDrawBodyYaw = p.yaw, p.bodyYaw
+    lastDrawSpeed, lastDrawZoom = p.speed, zoom
     lastDrawSourceVersion = sourceVersion
 end
 
@@ -669,7 +685,16 @@ end
 local function staticTick()
     if not settled() then return end
     if not staticDue and sources.staticFilling(cfg) then staticDue = true end
-    sources.stepStatic(cfg, staticDue)
+    -- The player position is what decides whether a static kind is worth
+    -- walking again: things only appear where the level has streamed in
+    -- something new, and that happens because we TRAVELLED. Standing still,
+    -- stepStatic now does nothing at all for most kinds.
+    local p = frameState
+    if p ~= nil then
+        sources.stepStatic(cfg, staticDue, p.x, p.y)
+    else
+        sources.stepStatic(cfg, staticDue)
+    end
     staticDue = false
 end
 
@@ -897,6 +922,11 @@ menu.onCommit = function(keys)
             end
             redraw = true
         elseif key == "opacity" then relayout = true
+        elseif key == "showViewCone" or key == "viewConeOpacity"
+            or key == "viewConeSize" then
+            -- These are pure draw settings. Force one update even while the
+            -- player is standing still so the F5 change is visible at once.
+            redraw = true
         elseif key == "enabled" then render.setVisible(cfg.enabled)
         elseif key:sub(1, 4) == "show" or key == "onlyShinyPals"
             or key == "hideCollected" or key == "megazoom"
@@ -1003,7 +1033,8 @@ local MENU_MS   = 250
 local MAINT_MS  = 2000
 
 local lastMove, lastScan, lastMenu, lastMaint = 0.0, 0.0, 0.0, 0.0
-local lastDrawX, lastDrawY, lastDrawYaw, lastDrawSpeed, lastDrawZoom = nil, nil, nil, nil, nil
+local lastDrawX, lastDrawY, lastDrawYaw, lastDrawBodyYaw = nil, nil, nil, nil
+local lastDrawSpeed, lastDrawZoom = nil, nil
 local lastDrawSourceVersion = -1
 
 -- ---------------------------------------------------------------
@@ -1175,29 +1206,37 @@ guard.register("world transition hook", function()
     end))
 end)
 
-local function bind(label, key, action)
+-- The keys come from config.ini beside the settings file - see keys.lua.
+-- The action names are the same strings the queue already carries, so a
+-- rebound key changes nothing downstream: the bind still only appends to
+-- the ring buffer, exactly as the threading rule requires.
+local boundKeys = nil
+
+local function bind(label, binding, action)
     guard.register(label, function()
-        RegisterKeyBind(key, guard.callback(label, function() request(action) end))
+        local cb = guard.callback(label, function() request(action) end)
+        -- Two shapes: with modifiers and without. The modifier form is only
+        -- attempted when the player actually asked for one, so a build that
+        -- reflects it differently costs nothing to anybody else.
+        if binding.mods ~= nil and #binding.mods > 0 then
+            local ok = pcall(RegisterKeyBind, binding.key, binding.mods, cb)
+            if ok then return end
+            guard.log("config.ini: this UE4SS build refused the modifier on "
+                .. binding.name .. "; binding the plain key instead")
+        end
+        RegisterKeyBind(binding.key, cb)
     end)
 end
 
 if type(Key) == "table" then
-    bind("config menu (F5)", Key.F5, "menu")
-    bind("megazoom (F1)", Key.F1, "megazoom")
-    bind("cycle corner (F2)", Key.F2, "corner")
-    bind("toggle minimap (F3)", Key.F3, "visible")
-    bind("edit mode (F4)", Key.F4, "edit")
-    -- UE4SS names the arrows *_ARROW; plain LEFT/RIGHT/UP/DOWN do not
-    -- exist, so 2.0.2 failed to bind all four and edit mode could never
-    -- be moved.
-    bind("edit move left",  Key.LEFT_ARROW,  "left")
-    bind("edit move right", Key.RIGHT_ARROW, "right")
-    bind("edit move up",    Key.UP_ARROW,    "up")
-    bind("edit move down",  Key.DOWN_ARROW,  "down")
-    bind("zoom in (+)",  Key.ADD,        "zoomIn")
-    bind("zoom in (=)",  Key.OEM_PLUS,   "zoomIn")
-    bind("zoom out (-)", Key.SUBTRACT,   "zoomOut")
-    bind("zoom out (_)", Key.OEM_MINUS,  "zoomOut")
+    boundKeys = keys.load(KEYS_PATH)
+    for i = 1, #keys.order() do
+        local action = keys.order()[i][1]
+        local list = boundKeys[action]
+        for j = 1, #list do
+            bind(action .. " (" .. list[j].name .. ")", list[j], action)
+        end
+    end
 else
     guard.log("the UE4SS 'Key' table is missing; keybinds are unavailable")
 end
@@ -1208,4 +1247,6 @@ guard.register("pump loop", function()
     LoopAsync(PUMP_MS, guard.loopBody("pump", pump, anythingDue))
 end)
 
-guard.log("PalMiniMap 2.3.3 loaded - F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom")
+guard.log("PalMiniMap 2.3.5 loaded - " ..
+    (boundKeys and keys.describe(boundKeys)
+     or "F1 megazoom, F2 corner, F3 show/hide, F4 edit, F5 menu, +/- zoom"))
