@@ -355,34 +355,25 @@ local campExact = false    -- the player's own component has answered at least o
 -- thousands of them every few seconds, on the game thread. That is what
 -- the collector was doing when the frame hitched.
 -- ---------------------------------------------------------------
+-- ELEVATION_Z
+-- K2_GetActorLocation already returns the whole FVector. Carry Z through the
+-- same read so marker elevation does not require a second reflected call.
 local function rawLocation(actor)
-    local loc = actor:K2_GetActorLocation()
-    return loc.X, loc.Y
-end
-
-local function actorLocation(actor)
-    if not guard.alive(actor) then return nil end
-    local ok, x, y = pcall(rawLocation, actor)
-    if not ok or type(x) ~= "number" or type(y) ~= "number" then return nil end
-    return x, y
-end
-M.actorLocation = actorLocation
-
--- Height as well, for the ONE actor that needs it: the live terrain
--- capture has to know how high to put its camera (capture.lua). Kept
--- separate from actorLocation rather than added to it because that one is
--- called for hundreds of actors a scan and every extra field read is paid
--- by all of them.
-local function rawLocationZ(actor)
     local loc = actor:K2_GetActorLocation()
     return loc.X, loc.Y, loc.Z
 end
 
-function M.actorLocation3(actor)
+local function actorLocation(actor)
     if not guard.alive(actor) then return nil end
-    local ok, x, y, z = pcall(rawLocationZ, actor)
+    local ok, x, y, z = pcall(rawLocation, actor)
     if not ok or type(x) ~= "number" or type(y) ~= "number" then return nil end
     return x, y, (type(z) == "number") and z or 0.0
+end
+M.actorLocation = actorLocation
+
+-- Kept for capture.lua's public three-coordinate helper.
+function M.actorLocation3(actor)
+    return actorLocation(actor)
 end
 
 local function rawName(actor) return actor:GetFName():ToString() end
@@ -2094,7 +2085,7 @@ local function stepKind(cfg)
     while i < stop do
         i = i + 1
         local a = all[i]
-        local x, y = actorLocation(a)
+        local x, y, z = actorLocation(a)
         if x ~= nil then
             local skip = cfg.hideCollected and spec.collected ~= nil
                          and spec.collected(a)
@@ -2111,7 +2102,7 @@ local function stepKind(cfg)
                 count = count + 1
                 local p = list[count]          -- reused, not reallocated
                 if p == nil then p = {}; list[count] = p end
-                p.x, p.y = x, y
+                p.x, p.y, p.z = x, y, z
                 -- ALWAYS assigned, never left alone: `p` is a reused table,
                 -- so a texture set by a previous pass over a different kind
                 -- would otherwise stick to an entry that has no business
@@ -2159,7 +2150,7 @@ local function rebuildStatic(cfg, px, py, zoom)
                         n = n + 1
                         local slot = found[n]
                         if slot == nil then slot = {}; found[n] = slot end
-                        slot.x, slot.y, slot.kind, slot.d = p.x, p.y, spec.kind, d
+                        slot.x, slot.y, slot.z, slot.kind, slot.d = p.x, p.y, p.z, spec.kind, d
                         slot.tex = p.tex        -- nil for every kind but eggs
                     end
                 end
@@ -2181,7 +2172,7 @@ local function rebuildStatic(cfg, px, py, zoom)
         local slot = found[i]
         local o = out[i]
         if o == nil then o = {}; out[i] = o end
-        o.x, o.y, o.kind, o.tex = slot.x, slot.y, slot.kind, slot.tex
+        o.x, o.y, o.z, o.kind, o.tex = slot.x, slot.y, slot.z, slot.kind, slot.tex
     end
     for i = #out, limit + 1, -1 do out[i] = nil end
     S.staticDirty = false
@@ -2384,11 +2375,11 @@ function M.staticDirty() return S.staticDirty end
 -- ---------------------------------------------------------------
 local markPool = {}
 
-local function emit(n, x, y, tex, size, tint, fallback, isPal)
+local function emit(n, x, y, z, tex, size, tint, fallback, isPal)
     n = n + 1
     local m = markPool[n]
     if m == nil then m = {}; markPool[n] = m end
-    m.x, m.y = x, y
+    m.x, m.y, m.z = x, y, z
     m.texture, m.fallback = tex, fallback
     -- `or WHITE` closes a pooled-entry trap rather than fixing a live bug:
     -- every caller passes a tint today, but render.lua only writes the
@@ -2414,7 +2405,7 @@ function M.collect(cfg, px, py, zoom)
 
     for i = 1, #S.static do
         local s = S.static[i]
-        n = emit(n, s.x, s.y, s.tex or ICON[s.kind] or ICON.member, isz,
+        n = emit(n, s.x, s.y, s.z, s.tex or ICON[s.kind] or ICON.member, isz,
                  TINT[s.kind] or WHITE, ICON.member, false)
     end
 
@@ -2424,7 +2415,7 @@ function M.collect(cfg, px, py, zoom)
     if withPals then
         for i = 1, #S.pals do
             local p = S.pals[i]
-            local x, y = actorLocation(p.actor)
+            local x, y, z = actorLocation(p.actor)
             if x ~= nil then
                 local tex, tint = ICON.member, (p.friend and TINT.friend or WHITE)
                 if p.icon then
@@ -2436,29 +2427,29 @@ function M.collect(cfg, px, py, zoom)
                 elseif p.shiny then
                     tint = TINT.shiny
                 end
-                n = emit(n, x, y, tex, p.shiny and (isz + 4) or isz,
+                n = emit(n, x, y, z, tex, p.shiny and (isz + 4) or isz,
                          tint, ICON.member, true)
             end
         end
     end
 
     for i = 1, #S.players do
-        local x, y = actorLocation(S.players[i])
+        local x, y, z = actorLocation(S.players[i])
         if x ~= nil then
-            n = emit(n, x, y, ICON.member, isz, TINT.player, nil, false)
+            n = emit(n, x, y, z, ICON.member, isz, TINT.player, nil, false)
         end
     end
 
     for i = 1, #S.npcs do
         local e = S.npcs[i]
-        local x, y = actorLocation(e.actor)
+        local x, y, z = actorLocation(e.actor)
         if x ~= nil then
             -- A portrait is already full colour, so it is drawn as it is; the
             -- beige tint is for the generic marker, which is a silhouette and
             -- needs the colour to say "person" rather than "pal".
             local tex, tint = ICON.member, TINT.npc
             if e.icon then tex, tint = e.icon, WHITE end
-            n = emit(n, x, y, tex, isz, tint, ICON.member, false)
+            n = emit(n, x, y, z, tex, isz, tint, ICON.member, false)
         end
     end
 

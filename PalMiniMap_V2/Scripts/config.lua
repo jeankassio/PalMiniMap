@@ -169,6 +169,12 @@ local DEFAULTS = {
     viewConeOpacity    = 0.22,
     viewConeSize       = 0.92,
 
+    -- ELEVATION_INDICATORS
+    -- Unreal/Palworld world units are centimetres: 1000 is about 10 metres.
+    showElevationIndicators = true,
+    elevationThreshold      = 500,
+    elevationIndicatorSize  = 9,
+
     -- refresh rates in milliseconds
     moveIntervalMs     = 100,     -- reposition icons / recentre the map
     scanIntervalMs     = 4000,    -- look for new actors

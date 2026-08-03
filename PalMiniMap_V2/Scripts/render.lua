@@ -54,6 +54,9 @@ local RIM   = 0.038     -- opaque bezel width, fraction of the diameter
 local INSET = 0.018     -- how much smaller the strip disc is than the widget
 local PLAYER_TEXTURE = "/Game/Pal/Texture/UI/InGame/T_icon_map_player.T_icon_map_player"
 local VIEW_CONE_TEXTURE = "/PalMiniMap/T_view_cone.T_view_cone"
+-- ELEVATION_RENDER
+local ELEVATION_ARROW_TEXTURE = "/PalMiniMap/T_elevation_arrow.T_elevation_arrow"
+local MAX_ELEVATION_INDICATORS = 48
 -- Duplicated from sources.lua on purpose: this is the marker EVERY icon
 -- falls back to while its own portrait is still queued, so build() loads
 -- it up front rather than letting the draw loop discover it is missing.
@@ -79,6 +82,7 @@ local S = {
     playerIcon = nil, playerSlot = nil,
     playerSize = nil, playerAngle = nil,
     pool = {},              -- { image=, slot=, inUse=, tex=, tint=, angle=, size= }
+    elevationPool = {},     -- bounded screen-oriented arrow overlays
     reportedSize = false,
     visible = false,
     builtSize = nil,
@@ -403,6 +407,7 @@ function M.destroy()
     S.playerIcon, S.playerSlot = nil, nil
     S.playerSize, S.playerAngle = nil, nil
     S.pool = {}
+    S.elevationPool = {}
     S.visible = false
     S.builtSize, S.builtPool, S.builtCircular = nil, nil, nil
 end
@@ -661,6 +666,28 @@ function M.build(pc, cfg)
             setVisible(img, false)
             S.pool[#S.pool + 1] = { image = img, slot = slot, inUse = false }
         end
+    end
+
+    -- Elevation overlays have their own smaller pool. Most markers are near
+    -- the player's height, so duplicating every icon slot would waste widgets.
+    local elevationTex = assets.loadNow(ELEVATION_ARROW_TEXTURE, false)
+    if elevationTex ~= nil then
+        local elevationCapacity = math.min(capacity, MAX_ELEVATION_INDICATORS)
+        for _ = 1, elevationCapacity do
+            local img = construct("/Script/UMG.Image", S.tree)
+            if img ~= nil then
+                local slot = addToCanvas(S.viewport, img)
+                guard.get(function() slot:SetZOrder(12) end)
+                guard.get(function() img:SetBrushFromTexture(elevationTex, false) end)
+                setVisible(img, false)
+                S.elevationPool[#S.elevationPool + 1] = {
+                    image = img, slot = slot, inUse = false,
+                    size = nil, angle = nil,
+                }
+            end
+        end
+    else
+        guard.log("icons/T_elevation_arrow.png is missing; elevation indicators are disabled")
     end
 
     -- edit-mode highlight: hidden normally, shown while F4 is active
@@ -976,6 +1003,16 @@ function M.update(cfg, player, marks, count)
     local limit = #S.pool
     local margin = cfg.iconSize
     local iconAngle = (rotate and not cfg.lockIconsNorth) and player.yaw or 0.0
+    local elevationUsed = 0
+    local elevationLimit = #S.elevationPool
+    local showElevation = cfg.showElevationIndicators == true
+    local elevationThreshold = tonumber(cfg.elevationThreshold) or 1000
+    if elevationThreshold < 0 then elevationThreshold = -elevationThreshold end
+    if elevationThreshold < 1 then elevationThreshold = 1 end
+    local elevationSize = tonumber(cfg.elevationIndicatorSize) or 9
+    if elevationSize < 5 then elevationSize = 5 end
+    if elevationSize > 18 then elevationSize = 18 end
+    local playerZ = type(player.z) == "number" and player.z or nil
     for i = 1, count do
         if used >= limit then break end
         local m = marks[i]
@@ -1077,12 +1114,56 @@ function M.update(cfg, player, marks, count)
                     setVisible(entry.image, show)
                     entry.inUse = show
                 end
+
+                -- A screen-oriented arrow appears only after a meaningful
+                -- vertical separation. Up is placed above the marker; down is
+                -- the same texture rotated 180 degrees and placed below it.
+                if show and showElevation and playerZ ~= nil
+                   and elevationUsed < elevationLimit and type(m.z) == "number" then
+                    local dz = m.z - playerZ
+                    local direction = 0
+                    if dz >= elevationThreshold then direction = 1
+                    elseif dz <= -elevationThreshold then direction = -1 end
+                    if direction ~= 0 then
+                        elevationUsed = elevationUsed + 1
+                        local arrow = S.elevationPool[elevationUsed]
+                        local gap = 1.0
+                        local ax = half + dx - elevationSize * 0.5
+                        local ay
+                        if direction > 0 then
+                            ay = half + dy - isz * 0.5 - elevationSize - gap
+                        else
+                            ay = half + dy + isz * 0.5 + gap
+                        end
+                        setPos(arrow.slot, ax, ay)
+                        if arrow.size ~= elevationSize then
+                            arrow.size = elevationSize
+                            setSize(arrow.slot, elevationSize, elevationSize)
+                        end
+                        local angle = direction > 0 and 0.0 or 180.0
+                        if arrow.angle ~= angle then
+                            arrow.angle = angle
+                            pcall(rawSetAngle, arrow.image, angle)
+                        end
+                        if not arrow.inUse then
+                            setVisible(arrow.image, true)
+                            arrow.inUse = true
+                        end
+                    end
+                end
             end
         end
     end
     -- retire the rest of the pool without destroying anything
     for i = used + 1, limit do
         local entry = S.pool[i]
+        if entry.inUse then
+            setVisible(entry.image, false)
+            entry.inUse = false
+        end
+    end
+    for i = elevationUsed + 1, elevationLimit do
+        local entry = S.elevationPool[i]
         if entry.inUse then
             setVisible(entry.image, false)
             entry.inUse = false
