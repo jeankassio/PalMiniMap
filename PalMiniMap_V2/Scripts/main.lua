@@ -314,7 +314,7 @@ local function readPlayerState()
     local speed = 0.0
     local ok, vx, vy, vz = pcall(rawVelocity, pawn)
     if ok and type(vx) == "number" and type(vy) == "number" then
-        speed = math.sqrt(vx * vx + vy * vy + (type(vz) == "number" and vz * vz or 0))
+        speed = math.sqrt(vx * vx + vy * vy)
     end
     -- reused: this table is rebuilt ten times a second and never escapes
     -- the tick that made it
