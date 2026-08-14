@@ -2,6 +2,23 @@
 PalMiniMap — a live minimap radar for Palworld 1.0+
 Based on Paldar by T3R3NC3B.
 
+WHAT'S NEW IN v1.2.8
+Changes by: Dracconus
+
+Fixed:
+- GetPalMonsters function call parameter mismatch (fixes arena crashes)
+- "Show Minimap" toggle now properly controls visibility
+- BaseCamp auto-hide toggle now properly hides minimap when enabled
+- Capture style changes (lit/flat) now take effect immediately
+
+Added:
+- Update rate slider minimum lowered to 16ms (was 50ms) for 60 FPS updates
+- Update rate slider step changed to 1ms for finer control
+- Visibility state tracking to reduce unnecessary render calls
+- Update rate slider now capped at 100ms max (illogical for anyone to want less than 10FPS)
+- Switched Basecamp detection to use PalPlayerCharacter instead of current pawn (fixes mount issues)
+- Cached PalPlayerCharacter after detection to prevent performance implications
+
 WHAT'S NEW IN v1.2.7
 - Error-handling pass over the whole script. Every boundary the mod is
   entered through (key presses, timers, engine hooks, script load) and
