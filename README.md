@@ -2,7 +2,7 @@
 PalMiniMap — a live minimap radar for Palworld 1.0+
 Based on Paldar by T3R3NC3B.
 
-WHAT'S NEW IN v1.2.8
+WHAT'S NEW IN v2.3.9
 Changes by: Dracconus
 
 Fixed:
