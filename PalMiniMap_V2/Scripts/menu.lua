@@ -135,7 +135,7 @@ local LAYOUT = {
     { key = "captureIntervalMs", label = "Re-render terrain every (ms)", kind = "int", min = 100, max = 2000, step = 50 },
     { key = "captureHeight",     label = "Camera height above player",  kind = "int", min = 200, max = 20000, step = 100 },
     { key = "liveZoomMax",       label = "Auto: live render up to zoom", kind = "int", min = 4000, max = 260000, step = 2000 },
-    { key = "moveIntervalMs",    label = "Update rate (ms, lower = smoother)", kind = "int", min = 50, max = 500, step = 5 },
+    { key = "moveIntervalMs",    label = "Update rate (ms, lower = smoother)", kind = "int", min = 16, max = 100, step = 1 },
     { key = "scanIntervalMs",    label = "Rescan world every (ms)",  kind = "int", min = 1000, max = 20000, step = 500 },
     { key = "maxPoiIcons",       label = "Max point-of-interest icons", kind = "int", min = 8, max = 128 },
 

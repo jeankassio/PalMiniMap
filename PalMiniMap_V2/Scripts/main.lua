@@ -1,3 +1,19 @@
+-- PalMiniMap 2.3.9 - Changes by: Dracconus
+--
+-- Fixed:
+--  - GetPalMonsters function call parameter mismatch (fixes arena crashes)
+--  - "Show Minimap" toggle now properly controls visibility
+--  - BaseCamp auto-hide toggle now properly hides minimap when enabled
+--  - Capture style changes (lit/flat) now take effect immediately
+--
+-- Added:
+--  - Update rate slider minimum lowered to 16ms (was 50ms) for 60 FPS updates
+--  - Update rate slider step changed to 1ms for finer control
+--  - Visibility state tracking to reduce unnecessary render calls
+--  - Update rate slider now capped at 100ms max (illogical for anyone to want less than 10FPS)
+--  - Switched Basecamp detection to use PalPlayerCharacter instead of current pawn (fixes mount issues)
+--  - Cached PalPlayerCharacter after detection to prevent performance implications
+--
 -- =====================================================================
 -- PalMiniMap 2.3.6 - a native minimap for Palworld
 --
@@ -175,6 +191,9 @@ end
 -- ---------------------------------------------------------------
 local SAVE_DELAY = 1.0
 local saveAt = nil
+
+-- Track the last forced hide state to avoid unnecessary visibility updates
+local lastForcedHide = nil
 
 local function markDirty()
     local due = os.clock() + SAVE_DELAY
@@ -612,13 +631,17 @@ local function movementTick()
 
     -- hide behind the game's own menus, and while inside a base camp if
     -- the user asked for that
-    local hide = gameUiOpen(p.x, p.y)
-                 or (cfg.autohideInBase and sources.insideBaseCamp())
-    if hide == render.isVisible() then
-        render.setVisible(not hide)
+    local hideForGameUI = gameUiOpen(p.x, p.y)
+    local hideForBaseCamp = cfg.autohideInBase and sources.insideBaseCamp()
+    local shouldHide = not cfg.enabled or hideForGameUI or hideForBaseCamp
+    
+    -- Only update visibility when the hide state actually changes
+    if shouldHide ~= lastForcedHide then
+        render.setVisible(not shouldHide)
+        lastForcedHide = shouldHide
     end
-    minimapHidden = hide and true or false
-    if hide then return end
+    minimapHidden = shouldHide and true or false
+    if shouldHide then return end
 
     local zoom = render.effectiveZoom(cfg, p.speed)
 
@@ -729,6 +752,7 @@ local function maintenanceTick()
         cachedPC = nil
         forgetGameMenu()
         worldName = ""
+        lastForcedHide = nil
         return
     end
     if name ~= worldName then
@@ -736,6 +760,7 @@ local function maintenanceTick()
         render.destroy()
         sources.forget()
         assets.forget()
+        lastForcedHide = nil
         capture.forget()
         lastDrawSourceVersion = -1
         menu.worldChanged(name)   -- the menu widget died with the old world
@@ -926,6 +951,7 @@ menu.onCommit = function(keys)
             -- settings. applyQuality also still pins the map texture's
             -- mips, which is what this key meant before 2.3.
             render.applyQuality(cfg)
+            capture.reconfigure(cfg)
             redraw = true
         elseif key == "liveTerrain" or key == "liveZoomMax" then
             -- Nothing to rebuild - but if the player is standing still,
@@ -947,7 +973,11 @@ menu.onCommit = function(keys)
             -- These are pure draw settings. Force one update even while the
             -- player is standing still so the F5 change is visible at once.
             redraw = true
-        elseif key == "enabled" then render.setVisible(cfg.enabled)
+        elseif key == "enabled" then
+            render.setVisible(cfg.enabled)
+            lastForcedHide = nil  -- Force re-evaluation of hide state
+        elseif key == "autohideInBase" then
+            lastForcedHide = nil  -- Force re-evaluation of hide state
         elseif key:sub(1, 4) == "show" or key == "onlyShinyPals"
             or key == "hideCollected" or key == "megazoom"
             or key == "zoom" then

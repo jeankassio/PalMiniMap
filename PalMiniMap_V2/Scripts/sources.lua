@@ -344,6 +344,7 @@ local S = {
 -- to know whether the camp positions are still needed. See updateProximity.
 local campRoute = nil      -- which route answered, logged once when it changes
 local campExact = false    -- the player's own component has answered at least once
+local cachedPlayerChar = nil -- cached PalPlayerCharacter (human player, never changes even when mounting)
 
 -- ---------------------------------------------------------------
 -- reflection helpers
@@ -785,7 +786,13 @@ end
 -- count and, for the probe's benefit, where it was found; on a raised
 -- call it returns nil plus the error text.
 local function callAndRead(shape, util, name, ctx, out, describe)
-    local ok, a, b, c = pcall(shape.fn, util, name, ctx)
+    local ok, a, b, c
+    -- Call the shape function with the correct number of parameters
+    if shape.name == "()" then
+        ok, a, b, c = pcall(shape.fn, util, name)
+    else
+        ok, a, b, c = pcall(shape.fn, util, name, ctx)
+    end
     if not ok then return nil, tostring(a) end
 
     local n = toArray(a, out, describe)
@@ -2324,6 +2331,33 @@ end
 function M.updateProximity(cfg, px, py, pawn)
     if not cfg.autohideInBase then S.campNear = false; return end
 
+    -- When mounted, current pawn is the mount/pet, not the PalPlayerCharacter.
+    -- The PalPlayerCharacter (human player) never changes - only the controlled pawn changes.
+    -- Cache it to avoid expensive FindAllOf every tick and allow proper base detection when mounted
+    if cachedPlayerChar == nil or not guard.alive(cachedPlayerChar) then
+        local players = findAll("PalPlayerCharacter", "player search")
+        if #players > 0 then
+            for i = 1, #players do
+                local p = players[i]
+                if guard.alive(p) then
+                    cachedPlayerChar = p
+                    break
+                end
+            end
+        end
+    end
+
+    -- Try component on cached PalPlayerCharacter (works when mounted)
+    if cachedPlayerChar ~= nil and guard.alive(cachedPlayerChar) then
+        local exact = insideByComponent(cachedPlayerChar)
+        if exact ~= nil then
+            campExact = true
+            S.campNear = exact
+            return
+        end
+    end
+
+    -- Fallback: try component on current pawn (may work for some mounts)
     local exact = insideByComponent(pawn)
     if exact ~= nil then
         campExact = true
