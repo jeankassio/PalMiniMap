@@ -1,3 +1,4 @@
+[![Somora](https://somora.media/assets/somora-github-en.png)](https://somora.media)
 # PalMiniMap
 PalMiniMap — a live minimap radar for Palworld 1.0+
 Based on Paldar by T3R3NC3B.
